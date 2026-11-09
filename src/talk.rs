@@ -11,6 +11,8 @@ pub enum Action {
     First,
     /// Go to the last slide.
     Last,
+    /// Swap what the two windows show.
+    Swap,
     /// Ask to quit. It takes effect when asked twice in a row.
     Quit,
 }
@@ -24,11 +26,12 @@ pub enum Outcome {
     Quit,
 }
 
-/// Position in the deck and the pending quit request.
+/// Position in the deck, the window roles and the pending quit request.
 #[derive(Debug)]
 pub struct Talk {
     slide: usize,
     slides: usize,
+    swapped: bool,
     quit_armed: bool,
 }
 
@@ -38,6 +41,7 @@ impl Talk {
         Self {
             slide: 0,
             slides,
+            swapped: false,
             quit_armed: false,
         }
     }
@@ -57,6 +61,11 @@ impl Talk {
         (self.slide + 1 < self.slides).then_some(self.slide + 1)
     }
 
+    /// Whether the presenter window shows the audience view and the other way around.
+    pub fn swapped(&self) -> bool {
+        self.swapped
+    }
+
     /// Whether one more quit request ends the talk.
     pub fn quit_armed(&self) -> bool {
         self.quit_armed
@@ -64,7 +73,6 @@ impl Talk {
 
     /// Applies an action and says whether the app keeps running.
     pub fn apply(&mut self, action: Action) -> Outcome {
-        let last = self.slides.saturating_sub(1);
         if action == Action::Quit {
             if self.quit_armed {
                 return Outcome::Quit;
@@ -73,13 +81,15 @@ impl Talk {
             return Outcome::Continue;
         }
         self.quit_armed = false;
-        self.slide = match action {
-            Action::Next => (self.slide + 1).min(last),
-            Action::Previous => self.slide.saturating_sub(1),
-            Action::First => 0,
-            Action::Last => last,
+        let last = self.slides.saturating_sub(1);
+        match action {
+            Action::Next => self.slide = (self.slide + 1).min(last),
+            Action::Previous => self.slide = self.slide.saturating_sub(1),
+            Action::First => self.slide = 0,
+            Action::Last => self.slide = last,
+            Action::Swap => self.swapped = !self.swapped,
             Action::Quit => unreachable!("handled above"),
-        };
+        }
         Outcome::Continue
     }
 }
@@ -111,6 +121,17 @@ mod tests {
         talk.apply(Action::Next);
         assert_eq!(talk.slide(), 0);
         assert_eq!(talk.next_slide(), None);
+    }
+
+    #[test]
+    fn swap_toggles_and_keeps_the_slide() {
+        let mut talk = Talk::new(3);
+        talk.apply(Action::Next);
+        talk.apply(Action::Swap);
+        assert!(talk.swapped());
+        assert_eq!(talk.slide(), 1);
+        talk.apply(Action::Swap);
+        assert!(!talk.swapped());
     }
 
     #[test]

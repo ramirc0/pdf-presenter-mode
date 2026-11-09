@@ -26,6 +26,7 @@ fn action_for(key: Key) -> Option<Action> {
         Key::ArrowLeft | Key::ArrowUp | Key::PageUp | Key::H | Key::K => Some(Action::Previous),
         Key::Home => Some(Action::First),
         Key::End => Some(Action::Last),
+        Key::X => Some(Action::Swap),
         Key::Q => Some(Action::Quit),
         _ => None,
     }
@@ -49,6 +50,11 @@ mod tests {
         for key in [Key::H, Key::K, Key::ArrowUp] {
             assert_eq!(action_for(key), Some(Action::Previous), "{key:?}");
         }
+    }
+
+    #[test]
+    fn x_swaps_the_windows() {
+        assert_eq!(action_for(Key::X), Some(Action::Swap));
     }
 
     #[test]
