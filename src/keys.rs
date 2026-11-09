@@ -20,8 +20,10 @@ pub fn actions(input: &egui::InputState) -> Vec<Action> {
 
 fn action_for(key: Key) -> Option<Action> {
     match key {
-        Key::ArrowRight | Key::Space | Key::PageDown => Some(Action::Next),
-        Key::ArrowLeft | Key::PageUp => Some(Action::Previous),
+        Key::ArrowRight | Key::ArrowDown | Key::Space | Key::PageDown | Key::L | Key::J => {
+            Some(Action::Next)
+        }
+        Key::ArrowLeft | Key::ArrowUp | Key::PageUp | Key::H | Key::K => Some(Action::Previous),
         Key::Home => Some(Action::First),
         Key::End => Some(Action::Last),
         Key::Q => Some(Action::Quit),
@@ -37,6 +39,16 @@ mod tests {
     fn clicker_keys_navigate() {
         assert_eq!(action_for(Key::PageDown), Some(Action::Next));
         assert_eq!(action_for(Key::PageUp), Some(Action::Previous));
+    }
+
+    #[test]
+    fn vim_keys_navigate() {
+        for key in [Key::J, Key::L, Key::ArrowDown] {
+            assert_eq!(action_for(key), Some(Action::Next), "{key:?}");
+        }
+        for key in [Key::H, Key::K, Key::ArrowUp] {
+            assert_eq!(action_for(key), Some(Action::Previous), "{key:?}");
+        }
     }
 
     #[test]
