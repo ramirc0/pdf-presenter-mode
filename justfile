@@ -20,3 +20,8 @@ lint:
 fixtures:
     for f in fixtures/*.typ; do typst compile --root fixtures "$f"; done
     head -c 4096 fixtures/basic.pdf > fixtures/truncated.pdf
+
+# Run the GUI tests in a headless sway.
+gui-test:
+    cargo build
+    nixGLIntel tests/gui.sh target/debug/ppm

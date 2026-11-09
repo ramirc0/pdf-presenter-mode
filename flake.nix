@@ -26,13 +26,17 @@
         packages = with pkgs; [
           cargo
           clippy
+          grim
+          jq
           just
           nixgl.packages.${system}.nixGLIntel
           pkg-config
           rust-analyzer
           rustc
           rustfmt
+          sway
           typst
+          wtype
         ];
         buildInputs = runtimeLibs;
         # Bake the dlopened libraries into RUNPATH, so builds run outside this shell.
