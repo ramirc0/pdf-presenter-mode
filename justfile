@@ -4,7 +4,7 @@ default:
 
 # Present a deck.
 run deck:
-    nixGLIntel cargo run -- {{deck}}
+    cargo run -- {{deck}}
 
 # Run the tests.
 test:
@@ -24,4 +24,4 @@ fixtures:
 # Run the GUI tests in a headless sway.
 gui-test:
     cargo build
-    nixGLIntel tests/gui.sh target/debug/ppm
+    tests/gui.sh target/debug/ppm

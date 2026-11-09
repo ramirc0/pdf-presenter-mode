@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GUI tests in a headless sway with virtual outputs, so the user's session is untouched.
-# Usage: tests/gui.sh PPM_BINARY. Run inside the dev shell.
+# Usage: tests/gui.sh PPM_BINARY. Run inside the dev shell, without nixGL around it.
 set -euo pipefail
 
 ppm=$(realpath "$1")
@@ -57,7 +57,14 @@ expect() {
 }
 
 start_sway
-"$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-3 > "$work/ppm.log" 2>&1 &
+cargo run --quiet --manifest-path "$root/Cargo.toml" -- "$root/fixtures/basic.pdf" --audience HEADLESS-3 \
+  > "$work/ppm.log" 2>&1 &
+expect "cargo run opens the presenter" "none"
+# cargo execs ppm, so ppm is this shell's child.
+pkill -x -P "$$" ppm || true
+wait $! || true
+
+nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-3 >> "$work/ppm.log" 2>&1 &
 expect "no audience while its monitor is missing" "none"
 swaymsg create_output >/dev/null
 expect "hotplug opens the audience fullscreen" "HEADLESS-3 fullscreen"
@@ -67,7 +74,7 @@ pkill -x -P "$$" ppm; sleep 0.5
 
 # The audience covers the presenter, so eframe stops running the presenter's ui.
 swaymsg focus output HEADLESS-2 >/dev/null
-"$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-2 >> "$work/ppm.log" 2>&1 &
+nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-2 >> "$work/ppm.log" 2>&1 &
 expect "the audience covers the presenter's output" "HEADLESS-2 fullscreen"
 swaymsg output HEADLESS-2 unplug >/dev/null
 expect "unplug closes an audience that covers the presenter" "none"

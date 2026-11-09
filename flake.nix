@@ -14,6 +14,7 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      nixGLIntel = nixgl.packages.${system}.nixGLIntel;
       # winit and glutin dlopen these at run time.
       runtimeLibs = with pkgs; [
         libGL
@@ -29,7 +30,7 @@
           grim
           jq
           just
-          nixgl.packages.${system}.nixGLIntel
+          nixGLIntel
           pkg-config
           rust-analyzer
           rustc
@@ -41,6 +42,8 @@
         buildInputs = runtimeLibs;
         # Bake the dlopened libraries into RUNPATH, so builds run outside this shell.
         RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath runtimeLibs}";
+        # The binary links Nix glibc, so it needs nixGL to load the host's GL driver.
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER = "${nixGLIntel}/bin/nixGLIntel";
       };
     };
 }
