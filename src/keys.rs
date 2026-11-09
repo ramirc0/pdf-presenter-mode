@@ -50,6 +50,24 @@ pub const BINDINGS: &[Binding] = &[
         does: "last slide",
     },
     Binding {
+        keys: &[Key::G],
+        alt: false,
+        action: Action::GoTo,
+        does: "go to a slide: type its number, then Enter",
+    },
+    Binding {
+        keys: &[Key::Enter],
+        alt: false,
+        action: Action::Confirm,
+        does: "confirm",
+    },
+    Binding {
+        keys: &[Key::Backspace],
+        alt: false,
+        action: Action::Backspace,
+        does: "delete a digit",
+    },
+    Binding {
         keys: &[Key::B, Key::Period],
         alt: false,
         action: Action::Blank,
@@ -111,6 +129,20 @@ pub const BINDINGS: &[Binding] = &[
     },
 ];
 
+/// The digit keys, in order from 0. They type a slide number after `g`.
+const DIGITS: [Key; 10] = [
+    Key::Num0,
+    Key::Num1,
+    Key::Num2,
+    Key::Num3,
+    Key::Num4,
+    Key::Num5,
+    Key::Num6,
+    Key::Num7,
+    Key::Num8,
+    Key::Num9,
+];
+
 /// The actions for the keys pressed this frame, in order.
 pub fn actions(input: &egui::InputState) -> Vec<Action> {
     input
@@ -133,6 +165,11 @@ pub fn actions(input: &egui::InputState) -> Vec<Action> {
 fn action_for(key: Key, modifiers: egui::Modifiers) -> Option<Action> {
     if modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
         return None;
+    }
+    if !modifiers.alt
+        && let Some(digit) = DIGITS.iter().position(|&d| d == key)
+    {
+        return Some(Action::Digit(digit as u8));
     }
     BINDINGS
         .iter()
@@ -171,6 +208,12 @@ mod tests {
         for key in [Key::H, Key::K, Key::ArrowUp] {
             assert_eq!(action_for(key, NONE), Some(Action::Previous), "{key:?}");
         }
+    }
+
+    #[test]
+    fn digits_type_numbers() {
+        assert_eq!(action_for(Key::Num7, NONE), Some(Action::Digit(7)));
+        assert_eq!(action_for(Key::Num7, ALT), None);
     }
 
     #[test]

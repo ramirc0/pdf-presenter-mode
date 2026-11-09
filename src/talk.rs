@@ -13,6 +13,14 @@ pub enum Action {
     First,
     /// Go to the last slide.
     Last,
+    /// Start typing a slide number to go to.
+    GoTo,
+    /// A digit of the slide number being typed.
+    Digit(u8),
+    /// Delete the last digit typed.
+    Backspace,
+    /// Go to the slide number typed.
+    Confirm,
     /// Swap what the two windows show.
     Swap,
     /// Turn the audience view black, or back.
@@ -53,6 +61,8 @@ pub struct Talk {
     blanked: bool,
     /// The slide the audience stays on, while frozen.
     frozen: Option<usize>,
+    /// The slide number typed so far after `g`, 0 before the first digit.
+    goto: Option<usize>,
     settings: Settings,
     help: bool,
     quit_armed: bool,
@@ -67,6 +77,7 @@ impl Talk {
             swapped: false,
             blanked: false,
             frozen: None,
+            goto: None,
             settings,
             help: false,
             quit_armed: false,
@@ -94,6 +105,11 @@ impl Talk {
             return None;
         }
         Some(self.frozen.unwrap_or(self.slide))
+    }
+
+    /// The slide number being typed after `g`, if any. `Some(0)` before the first digit.
+    pub fn goto(&self) -> Option<usize> {
+        self.goto
     }
 
     /// Whether the audience view is black.
@@ -142,11 +158,36 @@ impl Talk {
         }
         self.quit_armed = false;
         let last = self.slides.saturating_sub(1);
+        if let Some(typed) = self.goto {
+            match action {
+                Action::Digit(digit) => {
+                    let longer = typed * 10 + usize::from(digit);
+                    if longer <= self.slides.max(9) {
+                        self.goto = Some(longer);
+                    }
+                    return Outcome::Continue;
+                }
+                Action::Backspace => {
+                    self.goto = Some(typed / 10);
+                    return Outcome::Continue;
+                }
+                Action::Confirm => {
+                    if typed > 0 {
+                        self.slide = (typed - 1).min(last);
+                    }
+                    self.goto = None;
+                    return Outcome::Continue;
+                }
+                _ => self.goto = None,
+            }
+        }
         match action {
             Action::Next => self.slide = (self.slide + 1).min(last),
             Action::Previous => self.slide = self.slide.saturating_sub(1),
             Action::First => self.slide = 0,
             Action::Last => self.slide = last,
+            Action::GoTo => self.goto = Some(0),
+            Action::Digit(_) | Action::Backspace | Action::Confirm => {}
             Action::Swap => self.swapped = !self.swapped,
             Action::Blank => self.blanked = !self.blanked,
             Action::Freeze => {
@@ -206,6 +247,45 @@ mod tests {
         assert_eq!(talk.slide(), 1);
         talk.apply(Action::Swap);
         assert!(!talk.swapped());
+    }
+
+    #[test]
+    fn goto_jumps_to_the_typed_slide() {
+        let mut talk = Talk::new(12, Settings::default());
+        for action in [Action::GoTo, Action::Digit(1), Action::Digit(1)] {
+            talk.apply(action);
+        }
+        assert_eq!(talk.goto(), Some(11));
+        assert_eq!(talk.slide(), 0);
+        talk.apply(Action::Confirm);
+        assert_eq!(talk.slide(), 10);
+        assert_eq!(talk.goto(), None);
+    }
+
+    #[test]
+    fn goto_ignores_digits_past_the_deck() {
+        let mut talk = Talk::new(12, Settings::default());
+        for action in [Action::GoTo, Action::Digit(4), Action::Digit(5)] {
+            talk.apply(action);
+        }
+        assert_eq!(talk.goto(), Some(4));
+        talk.apply(Action::Backspace);
+        assert_eq!(talk.goto(), Some(0));
+        talk.apply(Action::Confirm);
+        assert_eq!(talk.slide(), 0);
+    }
+
+    #[test]
+    fn other_keys_cancel_goto() {
+        let mut talk = Talk::new(12, Settings::default());
+        for action in [Action::GoTo, Action::Digit(5), Action::Next] {
+            talk.apply(action);
+        }
+        assert_eq!(talk.goto(), None);
+        assert_eq!(talk.slide(), 1);
+        talk.apply(Action::Digit(3));
+        talk.apply(Action::Confirm);
+        assert_eq!(talk.slide(), 1);
     }
 
     #[test]

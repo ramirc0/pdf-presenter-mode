@@ -187,6 +187,14 @@ impl Stage {
                 self.talk.slide() + 1,
                 self.talk.slides()
             ));
+            if let Some(typed) = self.talk.goto() {
+                let typed = if typed == 0 {
+                    String::new()
+                } else {
+                    typed.to_string()
+                };
+                ui.strong(format!("go to slide: {typed}_"));
+            }
             let badge = |ui: &mut egui::Ui, text: &str| {
                 ui.label(
                     egui::RichText::new(text)
