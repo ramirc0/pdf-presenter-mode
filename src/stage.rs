@@ -1,12 +1,13 @@
 //! What both windows share: the talk, the renderer and where each window draws.
 
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
-use crate::deck::PageSize;
+use crate::deck::{Deck, PageSize};
 use crate::keys;
 use crate::pdfpc::Notes;
 use crate::render::{Placement, Renderer, Target, place};
@@ -42,6 +43,8 @@ pub struct Stage {
     markdown: CommonMarkCache,
     talk: Talk,
     renderer: Renderer,
+    /// Decks reopened after their files changed.
+    reloads: Receiver<Deck>,
     /// The renders each window drew in its last frame, most important first.
     shown: [Vec<Target>; 2],
     /// The overview thumbnails each window drew in its last frame. They render last.
@@ -50,22 +53,24 @@ pub struct Stage {
 }
 
 impl Stage {
-    /// Presents `pages` from the first slide, with `notes` in the presenter view arranged
-    /// by `settings`. `repaint` must repaint both windows.
+    /// Presents `deck` from the first slide, with the presenter view arranged by `settings`.
+    /// Each deck from `reloads` replaces the current one. Textures go to `ctx`, and
+    /// `repaint` must repaint both windows.
     pub fn new(
-        pages: Vec<PageSize>,
-        notes: Notes,
+        deck: Deck,
         settings: Settings,
-        renderer: Renderer,
+        reloads: Receiver<Deck>,
+        ctx: egui::Context,
         repaint: Repaint,
     ) -> Self {
-        let talk = Talk::new(pages.len(), settings);
+        let talk = Talk::new(deck.pages.len(), settings);
         Self {
-            pages,
-            notes,
+            pages: deck.pages,
+            notes: deck.notes,
             markdown: CommonMarkCache::default(),
             talk,
-            renderer,
+            renderer: Renderer::new(ctx, deck.pdf, repaint.clone()),
+            reloads,
             shown: [Vec::new(), Vec::new()],
             thumbnails: [Vec::new(), Vec::new()],
             repaint,
@@ -105,6 +110,13 @@ impl Stage {
 
     /// Draws `window`'s view into `ui`.
     pub fn draw(&mut self, ui: &mut egui::Ui, window: Window) {
+        if let Some(deck) = self.reloads.try_iter().last() {
+            self.talk.reload(deck.pages.len());
+            self.pages = deck.pages;
+            self.notes = deck.notes;
+            // A new renderer has no textures, so no page of the old deck can show.
+            self.renderer = Renderer::new(ui.ctx().clone(), deck.pdf, self.repaint.clone());
+        }
         self.close(window);
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, egui::Color32::BLACK);

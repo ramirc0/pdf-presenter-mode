@@ -70,6 +70,11 @@ impl Deck {
     }
 }
 
+/// Where the notes for the deck at `path` sit beside it: `<deck>.pdfpc`.
+pub fn sidecar(path: &Path) -> std::path::PathBuf {
+    path.with_extension("pdfpc")
+}
+
 fn read_notes(path: &Path) -> anyhow::Result<Notes> {
     let json = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
     Notes::from_pdfpc(&json).with_context(|| format!("cannot parse {}", path.display()))
@@ -83,7 +88,7 @@ fn notes_beside(pdf: &Pdf, path: &Path) -> Notes {
             Notes::from_pdfpc(&json),
         ),
         None => {
-            let sidecar = path.with_extension("pdfpc");
+            let sidecar = sidecar(path);
             if !sidecar.exists() {
                 return Notes::default();
             }

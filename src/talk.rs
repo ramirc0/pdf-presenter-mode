@@ -106,6 +106,19 @@ impl Talk {
         }
     }
 
+    /// Carries the talk over to a reloaded deck of `slides` slides.
+    /// Positions past the new end move to the last slide.
+    pub fn reload(&mut self, slides: usize) {
+        self.slides = slides;
+        let last = slides.saturating_sub(1);
+        self.slide = self.slide.min(last);
+        self.frozen = self.frozen.map(|slide| slide.min(last));
+        self.overview = self
+            .overview
+            .filter(|_| slides > 0)
+            .map(|slide| slide.min(last));
+    }
+
     /// The zero-based index of the current slide.
     pub fn slide(&self) -> usize {
         self.slide
@@ -399,6 +412,23 @@ mod tests {
             [columns(1), columns(4), columns(5), columns(10), columns(16)],
             [1, 2, 3, 4, 4]
         );
+    }
+
+    #[test]
+    fn a_reload_keeps_the_position_inside_the_new_deck() {
+        let now = Instant::now();
+        let mut talk = Talk::new(9, Settings::default());
+        talk.apply(Action::Last, now);
+        talk.apply(Action::Freeze, now);
+        talk.apply(Action::Overview, now);
+        talk.reload(12);
+        assert_eq!((talk.slide(), talk.audience_slide()), (8, Some(8)));
+        talk.reload(4);
+        assert_eq!(talk.slide(), 3);
+        assert_eq!(talk.audience_slide(), Some(3));
+        assert_eq!(talk.overview(), Some(3));
+        talk.reload(0);
+        assert_eq!((talk.slide(), talk.overview()), (0, None));
     }
 
     #[test]

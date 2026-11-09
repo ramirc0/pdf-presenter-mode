@@ -12,6 +12,7 @@ mod settings;
 mod stage;
 mod talk;
 mod timer;
+mod watch;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -28,7 +29,6 @@ use crate::deck::Deck;
 use crate::logging::StderrLog;
 use crate::monitors::Monitors;
 use crate::presenter::{Console, Projector, projector_id};
-use crate::render::Renderer;
 use crate::settings::Settings;
 use crate::stage::{Repaint, Stage};
 use crate::timer::Goal;
@@ -59,19 +59,33 @@ struct Cli {
 /// How often to look for a new or missing monitor.
 const MONITOR_POLL: Duration = Duration::from_secs(1);
 
+/// How often to look for a changed deck or notes file.
+const RELOAD_POLL: Duration = Duration::from_secs(1);
+
 static LOG: StderrLog = StderrLog::new();
 
 fn main() -> anyhow::Result<()> {
     log::set_logger(&LOG)?;
     log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
-    let mut deck = Deck::open(&cli.deck, cli.notes.as_deref())?;
     let goal = cli.end_time.map(Goal::EndsAt).or(cli
         .duration
         .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))));
-    if goal.is_some() {
-        deck.notes.schedule.goal = goal;
-    }
+    let open = {
+        let (path, notes) = (cli.deck.clone(), cli.notes.clone());
+        move || -> anyhow::Result<Deck> {
+            let mut deck = Deck::open(&path, notes.as_deref())?;
+            if goal.is_some() {
+                deck.notes.schedule.goal = goal;
+            }
+            Ok(deck)
+        }
+    };
+    let deck = open()?;
+    let watched = vec![
+        cli.deck.clone(),
+        cli.notes.unwrap_or_else(|| deck::sidecar(&cli.deck)),
+    ];
     let projector = if cli.windowed_audience {
         Projector::Windowed
     } else {
@@ -107,15 +121,15 @@ fn main() -> anyhow::Result<()> {
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
                     ctx.request_repaint_of(projector_id());
                 });
-                let worker_repaint = repaint.clone();
-                let renderer = Renderer::new(cc.egui_ctx.clone(), deck.pdf, move || {
-                    worker_repaint();
+                let reloads = watch::watch(watched, RELOAD_POLL, open, {
+                    let repaint = repaint.clone();
+                    move || repaint()
                 });
                 let stage = Stage::new(
-                    deck.pages,
-                    deck.notes,
+                    deck,
                     Settings::load(cc.storage),
-                    renderer,
+                    reloads,
+                    cc.egui_ctx.clone(),
                     repaint,
                 );
                 Ok(Box::new(Console::new(

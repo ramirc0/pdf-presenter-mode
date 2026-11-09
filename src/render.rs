@@ -15,6 +15,7 @@ use hayro::vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, Tar
 use hayro::{RenderCache, RenderSettings, render_into};
 
 use crate::deck::PageSize;
+use crate::stage::Repaint;
 
 /// A page at an exact size in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -94,12 +95,12 @@ impl Renderer {
     /// # Panics
     ///
     /// Panics if the operating system cannot start a thread.
-    pub fn new(ctx: egui::Context, pdf: Arc<Pdf>, repaint: impl Fn() + Send + 'static) -> Self {
+    pub fn new(ctx: egui::Context, pdf: Arc<Pdf>, repaint: Repaint) -> Self {
         let (requests, jobs) = mpsc::channel();
         let (done, results) = mpsc::channel();
         std::thread::Builder::new()
             .name("render".into())
-            .spawn(move || work(&pdf, &jobs, &done, &repaint))
+            .spawn(move || work(&pdf, &jobs, &done, &*repaint))
             .expect("cannot start the render thread");
         Self {
             ctx,
@@ -167,7 +168,7 @@ impl Renderer {
 }
 
 /// The worker loop: always serve the newest request, most urgent target first.
-fn work(pdf: &Pdf, jobs: &Receiver<Vec<Target>>, done: &Sender<Rendered>, repaint: &impl Fn()) {
+fn work(pdf: &Pdf, jobs: &Receiver<Vec<Target>>, done: &Sender<Rendered>, repaint: &dyn Fn()) {
     let pages = pdf.pages();
     let mut painter = Painter::new();
     let mut queue = VecDeque::new();
