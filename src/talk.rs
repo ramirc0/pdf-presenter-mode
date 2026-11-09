@@ -13,6 +13,12 @@ pub enum Action {
     Last,
     /// Swap what the two windows show.
     Swap,
+    /// Toggle fullscreen for the window the key went to.
+    Fullscreen,
+    /// Show or hide the shortcut hint.
+    Help,
+    /// Close whatever is open, such as the shortcut hint.
+    Cancel,
     /// Ask to quit. It takes effect when asked twice in a row.
     Quit,
 }
@@ -26,12 +32,13 @@ pub enum Outcome {
     Quit,
 }
 
-/// Position in the deck, the window roles and the pending quit request.
+/// Position in the deck, the window roles, what is open, and the pending quit request.
 #[derive(Debug)]
 pub struct Talk {
     slide: usize,
     slides: usize,
     swapped: bool,
+    help: bool,
     quit_armed: bool,
 }
 
@@ -42,6 +49,7 @@ impl Talk {
             slide: 0,
             slides,
             swapped: false,
+            help: false,
             quit_armed: false,
         }
     }
@@ -66,6 +74,11 @@ impl Talk {
         self.swapped
     }
 
+    /// Whether the shortcut hint is open.
+    pub fn help(&self) -> bool {
+        self.help
+    }
+
     /// Whether one more quit request ends the talk.
     pub fn quit_armed(&self) -> bool {
         self.quit_armed
@@ -88,6 +101,10 @@ impl Talk {
             Action::First => self.slide = 0,
             Action::Last => self.slide = last,
             Action::Swap => self.swapped = !self.swapped,
+            Action::Help => self.help = !self.help,
+            Action::Cancel => self.help = false,
+            // The window that got the key toggles its own fullscreen.
+            Action::Fullscreen => {}
             Action::Quit => unreachable!("handled above"),
         }
         Outcome::Continue
@@ -132,6 +149,18 @@ mod tests {
         assert_eq!(talk.slide(), 1);
         talk.apply(Action::Swap);
         assert!(!talk.swapped());
+    }
+
+    #[test]
+    fn the_hint_toggles_and_escape_closes_it() {
+        let mut talk = Talk::new(3);
+        talk.apply(Action::Help);
+        assert!(talk.help());
+        talk.apply(Action::Help);
+        assert!(!talk.help());
+        talk.apply(Action::Help);
+        talk.apply(Action::Cancel);
+        assert!(!talk.help());
     }
 
     #[test]

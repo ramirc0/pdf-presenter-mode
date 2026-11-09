@@ -9,7 +9,7 @@ use crate::deck::PageSize;
 use crate::keys;
 use crate::pdfpc::Notes;
 use crate::render::{Renderer, Target, place};
-use crate::talk::{Outcome, Talk};
+use crate::talk::{Action, Outcome, Talk};
 
 /// One of the app's two windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,11 @@ impl Stage {
         }
         (self.repaint)();
         for action in actions {
+            if action == Action::Fullscreen {
+                let fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+            }
             if self.talk.apply(action) == Outcome::Quit {
                 return Outcome::Quit;
             }
@@ -116,9 +121,7 @@ impl Stage {
         {
             let mut notes_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(16.0)));
             let style = notes_ui.style_mut();
-            for font in style.text_styles.values_mut() {
-                font.size *= NOTES_SCALE;
-            }
+            enlarge_text(style, NOTES_SCALE);
             // Brighter than egui's dark gray, while bold stays white.
             style.visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(210);
             egui::ScrollArea::vertical().show(&mut notes_ui, |ui| {
@@ -154,7 +157,44 @@ impl Stage {
             painter.rect_filled(backing, 4.0, egui::Color32::from_black_alpha(200));
             painter.galley(origin, galley, egui::Color32::WHITE);
         }
+        if view == View::Presenter && self.talk.help() {
+            show_shortcuts(ui);
+        }
     }
+}
+
+/// Scales every text style of `style` by `factor`.
+fn enlarge_text(style: &mut egui::Style, factor: f32) {
+    for font in style.text_styles.values_mut() {
+        font.size *= factor;
+    }
+}
+
+/// The shortcut hint, built from the key table: keys without a modifier, then the Alt layer.
+fn show_shortcuts(ui: &egui::Ui) {
+    egui::Area::new(egui::Id::unique("shortcuts"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ui.ctx(), |ui| {
+            enlarge_text(ui.style_mut(), 1.4);
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                for alt in [false, true] {
+                    ui.strong(if alt { "With Alt held" } else { "Keys" });
+                    egui::Grid::new(("shortcuts", alt))
+                        .num_columns(2)
+                        .spacing([24.0, 4.0])
+                        .show(ui, |ui| {
+                            for binding in keys::BINDINGS.iter().filter(|b| b.alt == alt) {
+                                let keys: Vec<String> =
+                                    binding.keys.iter().map(|&key| keys::label(key)).collect();
+                                ui.label(keys.join(", "));
+                                ui.label(binding.does);
+                                ui.end_row();
+                            }
+                        });
+                    ui.add_space(8.0);
+                }
+            });
+        });
 }
 
 /// The view `window` shows. A swap exchanges the two.
@@ -193,7 +233,6 @@ fn plan<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::talk::Action;
 
     fn area(width: f32, height: f32) -> Area {
         Area {
