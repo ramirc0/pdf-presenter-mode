@@ -11,12 +11,13 @@ mod talk;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use eframe::{UserEvent, egui};
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
 use crate::deck::Deck;
@@ -39,6 +40,9 @@ struct Cli {
     #[arg(long, conflicts_with = "audience")]
     windowed_audience: bool,
 }
+
+/// How often to look for a new or missing monitor.
+const MONITOR_POLL: Duration = Duration::from_secs(1);
 
 static LOG: StderrLog = StderrLog::new();
 
@@ -113,8 +117,7 @@ struct Windows<'a> {
 }
 
 impl Windows<'_> {
-    /// Updates the monitor names. A change repaints the root window, which places the projector.
-    /// Hotplug wakes the loop, so checking on every turn misses nothing.
+    /// Updates the monitor names. A change repaints both windows, since either may be covered.
     fn track_monitors(&self, event_loop: &ActiveEventLoop) {
         let names: Vec<String> = event_loop
             .available_monitors()
@@ -125,6 +128,7 @@ impl Windows<'_> {
             *current = names;
             if let Some(ctx) = self.gui.get() {
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
+                ctx.request_repaint_of(projector_id());
             }
         }
     }
@@ -154,6 +158,15 @@ impl ApplicationHandler<UserEvent> for Windows<'_> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.track_monitors(event_loop);
         self.eframe.about_to_wait(event_loop);
+        // winit has no hotplug event, and a new output does not wake the loop. Poll.
+        let poll = Instant::now() + MONITOR_POLL;
+        match event_loop.control_flow() {
+            ControlFlow::Wait => event_loop.set_control_flow(ControlFlow::WaitUntil(poll)),
+            ControlFlow::WaitUntil(deadline) if deadline > poll => {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(poll));
+            }
+            ControlFlow::WaitUntil(_) | ControlFlow::Poll => {}
+        }
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {

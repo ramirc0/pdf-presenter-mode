@@ -9,6 +9,7 @@ use crate::stage::{Stage, Window};
 use crate::talk::Outcome;
 
 /// Where the projector window goes.
+#[derive(Clone)]
 pub enum Projector {
     /// Fullscreen on a monitor: the requested connector, or else the first external one.
     Monitor {
@@ -17,6 +18,18 @@ pub enum Projector {
     },
     /// A normal window, for rehearsal and screen sharing.
     Windowed,
+}
+
+impl Projector {
+    /// Whether the projector window has somewhere to go among `names`.
+    fn has_place(&self, names: &[String]) -> bool {
+        match self {
+            Projector::Windowed => true,
+            Projector::Monitor { requested } => {
+                audience_monitor(names, requested.as_deref()).is_some()
+            }
+        }
+    }
 }
 
 /// The viewport of the projector window.
@@ -90,7 +103,19 @@ impl Console {
         };
         self.shown_on = Some(monitor);
         let stage = self.stage.clone();
+        let monitors = self.monitors.clone();
+        let projector = self.projector.clone();
         ctx.show_viewport_deferred(projector_id(), builder, move |ui, _class| {
+            // After an unplug the compositor can move this window over the presenter. A covered
+            // Wayland window gets no frame callbacks, so the presenter's ui, which closes this
+            // window, stops running. Leaving fullscreen uncovers it.
+            let names = monitors.lock().expect("monitor list poisoned").clone();
+            if !projector.has_place(&names) {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                return;
+            }
             let mut stage = stage.lock().expect("stage poisoned");
             if stage.handle_keys(ui) == Outcome::Quit {
                 ui.ctx()

@@ -12,15 +12,17 @@ const INTERNAL: [&str; 3] = ["eDP-", "LVDS-", "DSI-"];
 ///
 /// `requested` names a connector, such as `DP-6`. Without it, the first external monitor wins.
 /// A single monitor never gets an audience window, so the speaker keeps the presenter view.
+///
+/// An empty name is a Wayland output whose name has not arrived yet. It neither counts nor wins.
 pub fn audience_monitor(names: &[String], requested: Option<&str>) -> Option<usize> {
-    if names.len() < 2 {
+    if names.iter().filter(|n| !n.is_empty()).count() < 2 {
         return None;
     }
     match requested {
         Some(name) => names.iter().position(|n| n == name),
         None => names
             .iter()
-            .position(|n| !INTERNAL.iter().any(|prefix| n.starts_with(prefix))),
+            .position(|n| !n.is_empty() && !INTERNAL.iter().any(|prefix| n.starts_with(prefix))),
     }
 }
 
@@ -55,6 +57,16 @@ mod tests {
         assert_eq!(audience_monitor(&names(&["DP-6"]), None), None);
         assert_eq!(audience_monitor(&names(&["DP-6"]), Some("DP-6")), None);
         assert_eq!(audience_monitor(&[], None), None);
+    }
+
+    #[test]
+    fn an_output_without_a_name_yet_is_skipped() {
+        // A new Wayland output has no name until its name event arrives.
+        assert_eq!(audience_monitor(&names(&["eDP-1", ""]), None), None);
+        assert_eq!(
+            audience_monitor(&names(&["eDP-1", "", "DP-6"]), None),
+            Some(2)
+        );
     }
 
     #[test]
