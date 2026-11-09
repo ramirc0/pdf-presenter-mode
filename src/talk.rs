@@ -12,6 +12,14 @@ pub enum Action {
     Next,
     /// Go to the previous slide.
     Previous,
+    /// Go to the next slide, or down a row in the overview.
+    Down,
+    /// Go to the previous slide, or up a row in the overview.
+    Up,
+    /// Open or close the overview of all slides.
+    Overview,
+    /// Go to this slide, picked with the mouse in the overview.
+    Pick(usize),
     /// Go to the first slide.
     First,
     /// Go to the last slide.
@@ -72,6 +80,8 @@ pub struct Talk {
     frozen: Option<usize>,
     /// The slide number typed so far after `g`, 0 before the first digit.
     goto: Option<usize>,
+    /// The slide selected in the overview, while it is open.
+    overview: Option<usize>,
     timer: Timer,
     settings: Settings,
     help: bool,
@@ -88,6 +98,7 @@ impl Talk {
             blanked: false,
             frozen: None,
             goto: None,
+            overview: None,
             timer: Timer::default(),
             settings,
             help: false,
@@ -116,6 +127,22 @@ impl Talk {
             return None;
         }
         Some(self.frozen.unwrap_or(self.slide))
+    }
+
+    /// The slide selected in the overview, while it is open.
+    pub fn overview(&self) -> Option<usize> {
+        self.overview
+    }
+
+    /// How many slides the overview puts in a row: about as many rows as columns,
+    /// so 16:9 thumbnails fill a 16:9 window.
+    pub fn overview_columns(&self) -> usize {
+        let root = self.slides.isqrt();
+        if root * root == self.slides {
+            root
+        } else {
+            root + 1
+        }
     }
 
     /// The talk's stopwatch.
@@ -174,6 +201,38 @@ impl Talk {
         outcome
     }
 
+    /// Handles `action` while the overview is open with `selected` selected.
+    /// Returns `None` for actions that work the same with the overview open.
+    fn browse(&mut self, selected: usize, action: Action) -> Option<Outcome> {
+        let last = self.slides.saturating_sub(1);
+        let columns = self.overview_columns();
+        let select = match action {
+            Action::Next => (selected + 1).min(last),
+            Action::Previous => selected.saturating_sub(1),
+            Action::Down if selected + columns <= last => selected + columns,
+            Action::Up if selected >= columns => selected - columns,
+            Action::Down | Action::Up => selected,
+            Action::First => 0,
+            Action::Last => last,
+            Action::Confirm | Action::Pick(_) => {
+                let target = match action {
+                    Action::Pick(slide) => slide.min(last),
+                    _ => selected,
+                };
+                self.overview = None;
+                self.slide = target;
+                return Some(Outcome::Continue);
+            }
+            Action::Overview | Action::Cancel => {
+                self.overview = None;
+                return Some(Outcome::Continue);
+            }
+            _ => return None,
+        };
+        self.overview = Some(select);
+        Some(Outcome::Continue)
+    }
+
     fn change(&mut self, action: Action, now: Instant) -> Outcome {
         if action == Action::Quit {
             if self.quit_armed {
@@ -184,6 +243,11 @@ impl Talk {
         }
         self.quit_armed = false;
         let last = self.slides.saturating_sub(1);
+        if let Some(selected) = self.overview
+            && let Some(outcome) = self.browse(selected, action)
+        {
+            return outcome;
+        }
         if let Some(typed) = self.goto {
             match action {
                 Action::Digit(digit) => {
@@ -208,8 +272,10 @@ impl Talk {
             }
         }
         match action {
-            Action::Next => self.slide = (self.slide + 1).min(last),
-            Action::Previous => self.slide = self.slide.saturating_sub(1),
+            Action::Next | Action::Down => self.slide = (self.slide + 1).min(last),
+            Action::Previous | Action::Up => self.slide = self.slide.saturating_sub(1),
+            Action::Overview => self.overview = (self.slides > 0).then_some(self.slide),
+            Action::Pick(slide) => self.slide = slide.min(last),
             Action::First => self.slide = 0,
             Action::Last => self.slide = last,
             Action::GoTo => self.goto = Some(0),
@@ -229,7 +295,10 @@ impl Talk {
             Action::BiggerNotes => self.settings.bigger_notes(),
             Action::SmallerNotes => self.settings.smaller_notes(),
             Action::Help => self.help = !self.help,
-            Action::Cancel => self.help = false,
+            Action::Cancel => {
+                self.help = false;
+                self.overview = None;
+            }
             // The window that got the key toggles its own fullscreen.
             Action::Fullscreen => {}
             Action::Quit => unreachable!("handled above"),
@@ -289,6 +358,47 @@ mod tests {
         talk.apply(Action::ResetTimer, t0);
         talk.apply(Action::Previous, t0);
         assert!(!talk.timer().unused());
+    }
+
+    #[test]
+    fn the_overview_selects_without_moving_the_talk() {
+        let now = Instant::now();
+        let mut talk = Talk::new(9, Settings::default());
+        assert_eq!(talk.overview_columns(), 3);
+        talk.apply(Action::Next, now);
+        talk.apply(Action::Overview, now);
+        assert_eq!(talk.overview(), Some(1));
+        for action in [Action::Down, Action::Down, Action::Down, Action::Next] {
+            talk.apply(action, now);
+        }
+        assert_eq!(talk.overview(), Some(8));
+        assert_eq!(talk.slide(), 1);
+        assert_eq!(talk.audience_slide(), Some(1));
+        talk.apply(Action::Confirm, now);
+        assert_eq!(talk.slide(), 8);
+        assert_eq!(talk.overview(), None);
+    }
+
+    #[test]
+    fn escape_closes_the_overview_and_a_click_jumps() {
+        let now = Instant::now();
+        let mut talk = Talk::new(5, Settings::default());
+        talk.apply(Action::Overview, now);
+        talk.apply(Action::Next, now);
+        talk.apply(Action::Cancel, now);
+        assert_eq!((talk.overview(), talk.slide()), (None, 0));
+        talk.apply(Action::Overview, now);
+        talk.apply(Action::Pick(3), now);
+        assert_eq!((talk.overview(), talk.slide()), (None, 3));
+    }
+
+    #[test]
+    fn overview_columns_fit_the_deck() {
+        let columns = |slides| Talk::new(slides, Settings::default()).overview_columns();
+        assert_eq!(
+            [columns(1), columns(4), columns(5), columns(10), columns(16)],
+            [1, 2, 3, 4, 4]
+        );
     }
 
     #[test]

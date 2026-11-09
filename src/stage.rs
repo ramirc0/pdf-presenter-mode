@@ -9,7 +9,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use crate::deck::PageSize;
 use crate::keys;
 use crate::pdfpc::Notes;
-use crate::render::{Renderer, Target, place};
+use crate::render::{Placement, Renderer, Target, place};
 use crate::settings::{Layout, Settings};
 use crate::talk::{Action, Outcome, Talk};
 use crate::timer::{Urgency, clock_face};
@@ -44,6 +44,8 @@ pub struct Stage {
     renderer: Renderer,
     /// The renders each window drew in its last frame, most important first.
     shown: [Vec<Target>; 2],
+    /// The overview thumbnails each window drew in its last frame. They render last.
+    thumbnails: [Vec<Target>; 2],
     repaint: Repaint,
 }
 
@@ -65,6 +67,7 @@ impl Stage {
             talk,
             renderer,
             shown: [Vec::new(), Vec::new()],
+            thumbnails: [Vec::new(), Vec::new()],
             repaint,
         }
     }
@@ -97,11 +100,12 @@ impl Stage {
     /// Stops rendering for `window`, which has closed.
     pub fn close(&mut self, window: Window) {
         self.shown[window as usize].clear();
+        self.thumbnails[window as usize].clear();
     }
 
     /// Draws `window`'s view into `ui`.
     pub fn draw(&mut self, ui: &mut egui::Ui, window: Window) {
-        self.shown[window as usize].clear();
+        self.close(window);
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, egui::Color32::BLACK);
         match view_of(window, self.talk.swapped()) {
@@ -111,7 +115,11 @@ impl Stage {
             }
             View::Presenter => self.draw_presenter(ui, window),
         }
-        let wanted = plan(self.pages.len(), self.shown.iter().flatten());
+        let wanted = plan(
+            self.pages.len(),
+            self.shown.iter().flatten(),
+            self.thumbnails.iter().flatten(),
+        );
         self.renderer.request(wanted);
     }
 
@@ -120,6 +128,18 @@ impl Stage {
             .frame(egui::Frame::NONE.inner_margin(8))
             .show(ui, |ui| self.show_status(ui));
         let body = ui.available_rect_before_wrap();
+        if let Some(selected) = self.talk.overview() {
+            self.show_overview(ui, window, body, selected);
+        } else {
+            self.show_panels(ui, window, body);
+        }
+        if self.talk.help() {
+            show_shortcuts(ui);
+        }
+    }
+
+    /// The current and next slides and the notes, arranged by the layout.
+    fn show_panels(&mut self, ui: &mut egui::Ui, window: Window, body: egui::Rect) {
         let layout = self.talk.settings().layout;
         let splits = self.talk.settings_mut().splits_mut();
         let (left, right) = split(ui, "columns", body, &mut splits.columns, true);
@@ -142,25 +162,62 @@ impl Stage {
                 self.show_notes(ui, right);
             }
         }
-        if self.talk.help() {
-            show_shortcuts(ui);
+    }
+
+    /// Every slide in a grid. The selected one is outlined, and a click jumps to a slide.
+    fn show_overview(&mut self, ui: &egui::Ui, window: Window, body: egui::Rect, selected: usize) {
+        let slides = self.talk.slides();
+        let columns = self.talk.overview_columns();
+        let cell = egui::vec2(
+            body.width() / columns as f32,
+            body.height() / slides.div_ceil(columns) as f32,
+        );
+        let mut picked = None;
+        for page in 0..slides {
+            let offset = egui::vec2((page % columns) as f32, (page / columns) as f32) * cell;
+            let rect = egui::Rect::from_min_size(body.min + offset, cell).shrink(MARGIN);
+            let Some(placed) = self.paint(ui, Some(page), rect) else {
+                continue;
+            };
+            self.thumbnails[window as usize].push(placed.target);
+            let id = ui.scope_id().with(("thumbnail", page));
+            if ui.interact(placed.rect, id, egui::Sense::click()).clicked() {
+                picked = Some(page);
+            }
+            let stroke = if page == selected {
+                egui::Stroke::new(3.0, ui.visuals().warn_fg_color)
+            } else if page == self.talk.slide() {
+                egui::Stroke::new(2.0, ui.visuals().selection.bg_fill)
+            } else {
+                continue;
+            };
+            ui.painter()
+                .rect_stroke(placed.rect, 0.0, stroke, egui::StrokeKind::Outside);
+        }
+        if let Some(page) = picked {
+            self.talk.apply(Action::Pick(page), Instant::now());
+            (self.repaint)();
         }
     }
 
     /// Draws `page`, if the deck has it, fitted into `rect`, and records the render it needs.
     fn show_slide(&mut self, ui: &egui::Ui, window: Window, page: Option<usize>, rect: egui::Rect) {
-        let Some(page) = page.filter(|&page| page < self.pages.len()) else {
-            return;
-        };
-        let Some(placed) = place(page, self.pages[page], rect, ui.ctx().pixels_per_point()) else {
-            return;
-        };
-        self.shown[window as usize].push(placed.target);
+        if let Some(placed) = self.paint(ui, page, rect) {
+            self.shown[window as usize].push(placed.target);
+        }
+    }
+
+    /// Draws `page`, if the deck has it, fitted into `rect`, and says where it went.
+    /// Until its render arrives, a render of the same page at another size stands in.
+    fn paint(&self, ui: &egui::Ui, page: Option<usize>, rect: egui::Rect) -> Option<Placement> {
+        let page = page.filter(|&page| page < self.pages.len())?;
+        let placed = place(page, self.pages[page], rect, ui.ctx().pixels_per_point())?;
         if let Some(texture) = self.renderer.texture(placed.target) {
             let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
             ui.painter()
                 .image(texture.id(), placed.rect, uv, egui::Color32::WHITE);
         }
+        Some(placed)
     }
 
     fn show_notes(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -334,15 +391,20 @@ fn view_of(window: Window, swapped: bool) -> View {
 }
 
 /// The renders the windows need, most urgent first: everything on screen, then for each
-/// page on screen the page after it at the same size. That covers the next slide at the
-/// audience and current sizes, and the one after it at the next-slide panel's size.
-fn plan<'a>(pages: usize, shown: impl Iterator<Item = &'a Target> + Clone) -> Vec<Target> {
+/// page on screen the page after it at the same size, then the overview thumbnails.
+/// That covers the next slide at the audience and current sizes, and the one after it
+/// at the next-slide panel's size.
+fn plan<'a>(
+    pages: usize,
+    shown: impl Iterator<Item = &'a Target> + Clone,
+    thumbnails: impl Iterator<Item = &'a Target>,
+) -> Vec<Target> {
     let ahead = shown.clone().map(|target| Target {
         page: target.page + 1,
         ..*target
     });
     let mut wanted: Vec<Target> = Vec::new();
-    for target in shown.copied().chain(ahead) {
+    for target in shown.copied().chain(ahead).chain(thumbnails.copied()) {
         if target.page < pages && !wanted.contains(&target) {
             wanted.push(target);
         }
@@ -365,7 +427,7 @@ mod tests {
     #[test]
     fn on_screen_pages_come_before_the_pages_after_them() {
         let shown = [at(0, 1920), at(0, 640), at(1, 400)];
-        let wanted = plan(3, shown.iter());
+        let wanted = plan(3, shown.iter(), [].iter());
         let summary: Vec<_> = wanted.iter().map(|t| (t.page, t.width)).collect();
         assert_eq!(
             summary,
@@ -376,18 +438,27 @@ mod tests {
     #[test]
     fn the_last_page_has_nothing_after_it() {
         let shown = [at(1, 1920)];
-        assert_eq!(plan(2, shown.iter()), [at(1, 1920)]);
+        assert_eq!(plan(2, shown.iter(), [].iter()), [at(1, 1920)]);
     }
 
     #[test]
     fn same_sized_windows_share_renders() {
         let shown = [at(0, 800), at(0, 800)];
-        assert_eq!(plan(2, shown.iter()).len(), 2);
+        assert_eq!(plan(2, shown.iter(), [].iter()).len(), 2);
     }
 
     #[test]
     fn nothing_on_screen_needs_nothing() {
-        assert!(plan(3, [].iter()).is_empty());
+        assert!(plan(3, [].iter(), [].iter()).is_empty());
+    }
+
+    #[test]
+    fn thumbnails_come_last() {
+        let shown = [at(1, 1920)];
+        let thumbnails = [at(0, 160), at(1, 160), at(2, 160)];
+        let wanted = plan(3, shown.iter(), thumbnails.iter());
+        assert_eq!(wanted[..2], [at(1, 1920), at(2, 1920)]);
+        assert_eq!(wanted[2..], thumbnails);
     }
 
     #[test]

@@ -19,23 +19,28 @@ pub struct Binding {
 /// Every binding, in the order the shortcut hint lists them.
 pub const BINDINGS: &[Binding] = &[
     Binding {
-        keys: &[
-            Key::ArrowRight,
-            Key::ArrowDown,
-            Key::Space,
-            Key::PageDown,
-            Key::L,
-            Key::J,
-        ],
+        keys: &[Key::ArrowRight, Key::Space, Key::PageDown, Key::L],
         alt: false,
         action: Action::Next,
         does: "next slide",
     },
     Binding {
-        keys: &[Key::ArrowLeft, Key::ArrowUp, Key::PageUp, Key::H, Key::K],
+        keys: &[Key::ArrowLeft, Key::PageUp, Key::H],
         alt: false,
         action: Action::Previous,
         does: "previous slide",
+    },
+    Binding {
+        keys: &[Key::ArrowDown, Key::J],
+        alt: false,
+        action: Action::Down,
+        does: "next slide, or down a row in the overview",
+    },
+    Binding {
+        keys: &[Key::ArrowUp, Key::K],
+        alt: false,
+        action: Action::Up,
+        does: "previous slide, or up a row in the overview",
     },
     Binding {
         keys: &[Key::Home],
@@ -48,6 +53,12 @@ pub const BINDINGS: &[Binding] = &[
         alt: false,
         action: Action::Last,
         does: "last slide",
+    },
+    Binding {
+        keys: &[Key::Tab],
+        alt: false,
+        action: Action::Overview,
+        does: "overview of all slides",
     },
     Binding {
         keys: &[Key::G],
@@ -220,11 +231,13 @@ mod tests {
 
     #[test]
     fn vim_keys_navigate() {
-        for key in [Key::J, Key::L, Key::ArrowDown] {
-            assert_eq!(action_for(key, NONE), Some(Action::Next), "{key:?}");
+        assert_eq!(action_for(Key::L, NONE), Some(Action::Next));
+        assert_eq!(action_for(Key::H, NONE), Some(Action::Previous));
+        for key in [Key::J, Key::ArrowDown] {
+            assert_eq!(action_for(key, NONE), Some(Action::Down), "{key:?}");
         }
-        for key in [Key::H, Key::K, Key::ArrowUp] {
-            assert_eq!(action_for(key, NONE), Some(Action::Previous), "{key:?}");
+        for key in [Key::K, Key::ArrowUp] {
+            assert_eq!(action_for(key, NONE), Some(Action::Up), "{key:?}");
         }
     }
 
