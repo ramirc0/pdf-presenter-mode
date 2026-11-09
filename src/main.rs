@@ -11,6 +11,7 @@ mod render;
 mod settings;
 mod stage;
 mod talk;
+mod timer;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -30,6 +31,7 @@ use crate::presenter::{Console, Projector, projector_id};
 use crate::render::Renderer;
 use crate::settings::Settings;
 use crate::stage::{Repaint, Stage};
+use crate::timer::Goal;
 
 /// Present a PDF slide deck.
 #[derive(Parser)]
@@ -43,6 +45,12 @@ struct Cli {
     /// Put the audience window on this connector, such as DP-6, instead of the first external monitor.
     #[arg(long, value_name = "CONNECTOR")]
     audience: Option<String>,
+    /// Count down from this many minutes, instead of the notes file's duration.
+    #[arg(long, value_name = "MINUTES", conflicts_with = "end_time")]
+    duration: Option<u64>,
+    /// Count down to this local time, such as 14:30, instead of the notes file's end time.
+    #[arg(long, value_name = "HH:MM")]
+    end_time: Option<jiff::civil::Time>,
     /// Show the audience view as a normal window, for rehearsal and screen sharing.
     #[arg(long, conflicts_with = "audience")]
     windowed_audience: bool,
@@ -57,7 +65,13 @@ fn main() -> anyhow::Result<()> {
     log::set_logger(&LOG)?;
     log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
-    let deck = Deck::open(&cli.deck, cli.notes.as_deref())?;
+    let mut deck = Deck::open(&cli.deck, cli.notes.as_deref())?;
+    let goal = cli.end_time.map(Goal::EndsAt).or(cli
+        .duration
+        .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))));
+    if goal.is_some() {
+        deck.notes.schedule.goal = goal;
+    }
     let projector = if cli.windowed_audience {
         Projector::Windowed
     } else {

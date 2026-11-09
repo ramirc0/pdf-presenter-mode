@@ -1,6 +1,9 @@
 //! The state of a running talk, free of any GUI.
 
+use std::time::Instant;
+
 use crate::settings::Settings;
+use crate::timer::Timer;
 
 /// Something the speaker asks for, from a key or a click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +30,12 @@ pub enum Action {
     Blank,
     /// Keep the audience on the current slide while the presenter moves on, or let it follow again.
     Freeze,
+    /// Start or resume the timer.
+    StartTimer,
+    /// Pause or resume the timer.
+    PauseTimer,
+    /// Stop the timer and set it to zero.
+    ResetTimer,
     /// Switch between the two presenter layouts.
     Layout,
     /// Make the notes larger.
@@ -63,6 +72,7 @@ pub struct Talk {
     frozen: Option<usize>,
     /// The slide number typed so far after `g`, 0 before the first digit.
     goto: Option<usize>,
+    timer: Timer,
     settings: Settings,
     help: bool,
     quit_armed: bool,
@@ -78,6 +88,7 @@ impl Talk {
             blanked: false,
             frozen: None,
             goto: None,
+            timer: Timer::default(),
             settings,
             help: false,
             quit_armed: false,
@@ -105,6 +116,11 @@ impl Talk {
             return None;
         }
         Some(self.frozen.unwrap_or(self.slide))
+    }
+
+    /// The talk's stopwatch.
+    pub fn timer(&self) -> &Timer {
+        &self.timer
     }
 
     /// The slide number being typed after `g`, if any. `Some(0)` before the first digit.
@@ -147,8 +163,18 @@ impl Talk {
         self.quit_armed
     }
 
-    /// Applies an action and says whether the app keeps running.
-    pub fn apply(&mut self, action: Action) -> Outcome {
+    /// Applies an action taken at `now` and says whether the app keeps running.
+    /// The first slide change starts the timer.
+    pub fn apply(&mut self, action: Action, now: Instant) -> Outcome {
+        let before = self.slide;
+        let outcome = self.change(action, now);
+        if self.slide != before && self.timer.unused() {
+            self.timer.start(now);
+        }
+        outcome
+    }
+
+    fn change(&mut self, action: Action, now: Instant) -> Outcome {
         if action == Action::Quit {
             if self.quit_armed {
                 return Outcome::Quit;
@@ -196,6 +222,9 @@ impl Talk {
                     None => Some(self.slide),
                 }
             }
+            Action::StartTimer => self.timer.start(now),
+            Action::PauseTimer => self.timer.toggle_pause(now),
+            Action::ResetTimer => self.timer.reset(),
             Action::Layout => self.settings.layout = self.settings.layout.other(),
             Action::BiggerNotes => self.settings.bigger_notes(),
             Action::SmallerNotes => self.settings.smaller_notes(),
@@ -216,24 +245,24 @@ mod tests {
     #[test]
     fn navigation_stays_inside_the_deck() {
         let mut talk = Talk::new(3, Settings::default());
-        talk.apply(Action::Previous);
+        talk.apply(Action::Previous, Instant::now());
         assert_eq!(talk.slide(), 0);
-        talk.apply(Action::Next);
-        talk.apply(Action::Next);
-        talk.apply(Action::Next);
+        talk.apply(Action::Next, Instant::now());
+        talk.apply(Action::Next, Instant::now());
+        talk.apply(Action::Next, Instant::now());
         assert_eq!(talk.slide(), 2);
         assert_eq!(talk.next_slide(), None);
-        talk.apply(Action::First);
+        talk.apply(Action::First, Instant::now());
         assert_eq!(talk.slide(), 0);
         assert_eq!(talk.next_slide(), Some(1));
-        talk.apply(Action::Last);
+        talk.apply(Action::Last, Instant::now());
         assert_eq!(talk.slide(), 2);
     }
 
     #[test]
     fn an_empty_deck_has_no_next_slide() {
         let mut talk = Talk::new(0, Settings::default());
-        talk.apply(Action::Next);
+        talk.apply(Action::Next, Instant::now());
         assert_eq!(talk.slide(), 0);
         assert_eq!(talk.next_slide(), None);
     }
@@ -241,23 +270,36 @@ mod tests {
     #[test]
     fn swap_toggles_and_keeps_the_slide() {
         let mut talk = Talk::new(3, Settings::default());
-        talk.apply(Action::Next);
-        talk.apply(Action::Swap);
+        talk.apply(Action::Next, Instant::now());
+        talk.apply(Action::Swap, Instant::now());
         assert!(talk.swapped());
         assert_eq!(talk.slide(), 1);
-        talk.apply(Action::Swap);
+        talk.apply(Action::Swap, Instant::now());
         assert!(!talk.swapped());
+    }
+
+    #[test]
+    fn the_first_slide_change_starts_the_timer() {
+        let t0 = Instant::now();
+        let mut talk = Talk::new(3, Settings::default());
+        talk.apply(Action::Help, t0);
+        assert!(talk.timer().unused());
+        talk.apply(Action::Next, t0);
+        assert!(!talk.timer().unused());
+        talk.apply(Action::ResetTimer, t0);
+        talk.apply(Action::Previous, t0);
+        assert!(!talk.timer().unused());
     }
 
     #[test]
     fn goto_jumps_to_the_typed_slide() {
         let mut talk = Talk::new(12, Settings::default());
         for action in [Action::GoTo, Action::Digit(1), Action::Digit(1)] {
-            talk.apply(action);
+            talk.apply(action, Instant::now());
         }
         assert_eq!(talk.goto(), Some(11));
         assert_eq!(talk.slide(), 0);
-        talk.apply(Action::Confirm);
+        talk.apply(Action::Confirm, Instant::now());
         assert_eq!(talk.slide(), 10);
         assert_eq!(talk.goto(), None);
     }
@@ -266,12 +308,12 @@ mod tests {
     fn goto_ignores_digits_past_the_deck() {
         let mut talk = Talk::new(12, Settings::default());
         for action in [Action::GoTo, Action::Digit(4), Action::Digit(5)] {
-            talk.apply(action);
+            talk.apply(action, Instant::now());
         }
         assert_eq!(talk.goto(), Some(4));
-        talk.apply(Action::Backspace);
+        talk.apply(Action::Backspace, Instant::now());
         assert_eq!(talk.goto(), Some(0));
-        talk.apply(Action::Confirm);
+        talk.apply(Action::Confirm, Instant::now());
         assert_eq!(talk.slide(), 0);
     }
 
@@ -279,12 +321,12 @@ mod tests {
     fn other_keys_cancel_goto() {
         let mut talk = Talk::new(12, Settings::default());
         for action in [Action::GoTo, Action::Digit(5), Action::Next] {
-            talk.apply(action);
+            talk.apply(action, Instant::now());
         }
         assert_eq!(talk.goto(), None);
         assert_eq!(talk.slide(), 1);
-        talk.apply(Action::Digit(3));
-        talk.apply(Action::Confirm);
+        talk.apply(Action::Digit(3), Instant::now());
+        talk.apply(Action::Confirm, Instant::now());
         assert_eq!(talk.slide(), 1);
     }
 
@@ -292,22 +334,22 @@ mod tests {
     fn blank_hides_the_slide_from_the_audience() {
         let mut talk = Talk::new(3, Settings::default());
         assert_eq!(talk.audience_slide(), Some(0));
-        talk.apply(Action::Blank);
+        talk.apply(Action::Blank, Instant::now());
         assert_eq!(talk.audience_slide(), None);
-        talk.apply(Action::Next);
-        talk.apply(Action::Blank);
+        talk.apply(Action::Next, Instant::now());
+        talk.apply(Action::Blank, Instant::now());
         assert_eq!(talk.audience_slide(), Some(1));
     }
 
     #[test]
     fn freeze_holds_the_audience_until_released() {
         let mut talk = Talk::new(3, Settings::default());
-        talk.apply(Action::Freeze);
-        talk.apply(Action::Next);
-        talk.apply(Action::Next);
+        talk.apply(Action::Freeze, Instant::now());
+        talk.apply(Action::Next, Instant::now());
+        talk.apply(Action::Next, Instant::now());
         assert_eq!(talk.slide(), 2);
         assert_eq!(talk.audience_slide(), Some(0));
-        talk.apply(Action::Freeze);
+        talk.apply(Action::Freeze, Instant::now());
         assert_eq!(talk.audience_slide(), Some(2));
     }
 
@@ -319,35 +361,35 @@ mod tests {
     #[test]
     fn layout_toggles_and_notes_resize() {
         let mut talk = Talk::new(3, Settings::default());
-        talk.apply(Action::Layout);
+        talk.apply(Action::Layout, Instant::now());
         assert_eq!(talk.settings().layout, crate::settings::Layout::NotesFirst);
         let scale = talk.settings().notes_scale;
-        talk.apply(Action::BiggerNotes);
+        talk.apply(Action::BiggerNotes, Instant::now());
         assert!(talk.settings().notes_scale > scale);
-        talk.apply(Action::SmallerNotes);
+        talk.apply(Action::SmallerNotes, Instant::now());
         assert!((talk.settings().notes_scale - scale).abs() < 1e-4);
     }
 
     #[test]
     fn the_hint_toggles_and_escape_closes_it() {
         let mut talk = Talk::new(3, Settings::default());
-        talk.apply(Action::Help);
+        talk.apply(Action::Help, Instant::now());
         assert!(talk.help());
-        talk.apply(Action::Help);
+        talk.apply(Action::Help, Instant::now());
         assert!(!talk.help());
-        talk.apply(Action::Help);
-        talk.apply(Action::Cancel);
+        talk.apply(Action::Help, Instant::now());
+        talk.apply(Action::Cancel, Instant::now());
         assert!(!talk.help());
     }
 
     #[test]
     fn quit_needs_two_requests_in_a_row() {
         let mut talk = Talk::new(3, Settings::default());
-        assert_eq!(talk.apply(Action::Quit), Outcome::Continue);
+        assert_eq!(talk.apply(Action::Quit, Instant::now()), Outcome::Continue);
         assert!(talk.quit_armed());
-        assert_eq!(talk.apply(Action::Next), Outcome::Continue);
+        assert_eq!(talk.apply(Action::Next, Instant::now()), Outcome::Continue);
         assert!(!talk.quit_armed());
-        assert_eq!(talk.apply(Action::Quit), Outcome::Continue);
-        assert_eq!(talk.apply(Action::Quit), Outcome::Quit);
+        assert_eq!(talk.apply(Action::Quit, Instant::now()), Outcome::Continue);
+        assert_eq!(talk.apply(Action::Quit, Instant::now()), Outcome::Quit);
     }
 }

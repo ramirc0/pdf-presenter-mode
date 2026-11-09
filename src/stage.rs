@@ -1,6 +1,7 @@
 //! What both windows share: the talk, the renderer and where each window draws.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -11,6 +12,7 @@ use crate::pdfpc::Notes;
 use crate::render::{Renderer, Target, place};
 use crate::settings::{Layout, Settings};
 use crate::talk::{Action, Outcome, Talk};
+use crate::timer::{Urgency, clock_face};
 
 /// One of the app's two windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +87,7 @@ impl Stage {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
-            if self.talk.apply(action) == Outcome::Quit {
+            if self.talk.apply(action, Instant::now()) == Outcome::Quit {
                 return Outcome::Quit;
             }
         }
@@ -181,7 +183,36 @@ impl Stage {
 
     fn show_status(&self, ui: &mut egui::Ui) {
         enlarge_text(ui.style_mut(), 1.4);
+        let wall = jiff::Zoned::now();
+        // The clock and timers tick once per second, in this window only.
+        let to_next_second = 1_000_000_000 - wall.subsec_nanosecond().unsigned_abs();
+        ui.ctx()
+            .request_repaint_after(Duration::from_nanos(to_next_second.into()));
+        // Whole seconds, so elapsed and left always add up to the goal.
+        let elapsed = Duration::from_secs(self.talk.timer().elapsed(Instant::now()).as_secs());
+        let schedule = self.notes.schedule;
         ui.horizontal(|ui| {
+            ui.strong(wall.strftime("%H:%M").to_string());
+            ui.add_space(16.0);
+            let paused = if self.talk.timer().paused() {
+                " (paused)"
+            } else {
+                ""
+            };
+            ui.label(format!(
+                "elapsed {}{paused}",
+                clock_face(elapsed.try_into().unwrap_or_default())
+            ));
+            if let Some(left) = schedule.remaining(elapsed, wall.time()) {
+                ui.add_space(16.0);
+                let color = match schedule.urgency(left) {
+                    Urgency::Calm => ui.visuals().text_color(),
+                    Urgency::Closing => ui.visuals().warn_fg_color,
+                    Urgency::Over => ui.visuals().error_fg_color,
+                };
+                ui.colored_label(color, format!("left {}", clock_face(left)));
+            }
+            ui.add_space(16.0);
             ui.label(format!(
                 "slide {} / {}",
                 self.talk.slide() + 1,

@@ -104,6 +104,24 @@ pub const BINDINGS: &[Binding] = &[
         does: "freeze the audience, or let it follow again",
     },
     Binding {
+        keys: &[Key::S],
+        alt: true,
+        action: Action::StartTimer,
+        does: "start the timer",
+    },
+    Binding {
+        keys: &[Key::P],
+        alt: true,
+        action: Action::PauseTimer,
+        does: "pause or resume the timer",
+    },
+    Binding {
+        keys: &[Key::R],
+        alt: true,
+        action: Action::ResetTimer,
+        does: "reset the timer",
+    },
+    Binding {
         keys: &[Key::V],
         alt: true,
         action: Action::Layout,

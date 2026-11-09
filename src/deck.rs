@@ -80,7 +80,7 @@ fn notes_beside(pdf: &Pdf, path: &Path) -> Notes {
     let (source, notes) = match attached_pdfpc(pdf) {
         Some(json) => (
             format!("the notes attached to {}", path.display()),
-            Notes::from_pdfpc(&json).map_err(anyhow::Error::from),
+            Notes::from_pdfpc(&json),
         ),
         None => {
             let sidecar = path.with_extension("pdfpc");

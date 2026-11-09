@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use anyhow::Context;
 use serde::Deserialize;
+
+use crate::timer::{Goal, Schedule};
 
 /// The speaker notes of a deck, by page.
 #[derive(Debug, Default, PartialEq)]
@@ -11,6 +14,8 @@ pub struct Notes {
     pages: BTreeMap<usize, String>,
     /// Whether to show the notes as plain text instead of Markdown, from pdfpc's `disableMarkdown`.
     pub plain_text: bool,
+    /// The countdown, from pdfpc's `duration` or `endTime`, and `lastMinutes`.
+    pub schedule: Schedule,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +23,11 @@ pub struct Notes {
 struct File {
     #[serde(default)]
     disable_markdown: bool,
+    /// Minutes.
+    duration: Option<u64>,
+    /// `HH:MM`, local time.
+    end_time: Option<String>,
+    last_minutes: Option<u32>,
     #[serde(default)]
     pages: Vec<Page>,
 }
@@ -33,12 +43,30 @@ impl Notes {
     /// Parses a pdfpc format 2 file. Keys this app does not use are ignored.
     ///
     /// Entries that share a page are joined in file order, separated by a blank line.
+    /// `endTime` wins over `duration`, since it is the harder limit.
     ///
     /// # Errors
     ///
-    /// Fails if `json` is not a JSON object or a known key has the wrong type.
-    pub fn from_pdfpc(json: &[u8]) -> serde_json::Result<Self> {
+    /// Fails if `json` is not a JSON object, a known key has the wrong type,
+    /// or `endTime` is not a time such as `14:30`.
+    pub fn from_pdfpc(json: &[u8]) -> anyhow::Result<Self> {
         let file: File = serde_json::from_slice(json)?;
+        let end_time = file
+            .end_time
+            .map(|end| {
+                end.parse()
+                    .with_context(|| format!("endTime {end:?} is not a time such as 14:30"))
+            })
+            .transpose()?;
+        let goal = end_time.map(Goal::EndsAt).or(file
+            .duration
+            .map(|minutes| Goal::Length(std::time::Duration::from_secs(minutes * 60))));
+        let schedule = Schedule {
+            goal,
+            last_minutes: file
+                .last_minutes
+                .unwrap_or(Schedule::default().last_minutes),
+        };
         let mut pages: BTreeMap<usize, String> = BTreeMap::new();
         for page in file.pages.into_iter().filter(|page| !page.note.is_empty()) {
             pages
@@ -52,6 +80,7 @@ impl Notes {
         Ok(Self {
             pages,
             plain_text: file.disable_markdown,
+            schedule,
         })
     }
 
@@ -108,6 +137,29 @@ mod tests {
     fn skips_entries_without_a_note() {
         let notes = Notes::from_pdfpc(br#"{"pages": [{"idx": 0, "label": "1"}]}"#).unwrap();
         assert_eq!(notes, Notes::from_pdfpc(b"{}").unwrap());
+    }
+
+    #[test]
+    fn reads_the_schedule() {
+        let notes =
+            Notes::from_pdfpc(br#"{"duration": 20, "lastMinutes": 3, "pages": []}"#).unwrap();
+        assert_eq!(
+            notes.schedule.goal,
+            Some(Goal::Length(std::time::Duration::from_secs(1200)))
+        );
+        assert_eq!(notes.schedule.last_minutes, 3);
+        let notes = Notes::from_pdfpc(br#"{"duration": 20, "endTime": "14:30"}"#).unwrap();
+        assert_eq!(
+            notes.schedule.goal,
+            Some(Goal::EndsAt(jiff::civil::Time::constant(14, 30, 0, 0)))
+        );
+        assert_eq!(notes.schedule.last_minutes, 5);
+    }
+
+    #[test]
+    fn rejects_a_bad_end_time() {
+        let err = Notes::from_pdfpc(br#"{"endTime": "half past two"}"#).unwrap_err();
+        assert!(err.to_string().contains("endTime"), "{err}");
     }
 
     #[test]
