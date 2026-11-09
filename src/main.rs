@@ -1,6 +1,7 @@
 //! `ppm`: a presenter console for PDF slide decks.
 
 mod deck;
+mod fonts;
 mod keys;
 mod logging;
 mod monitors;
@@ -76,6 +77,7 @@ fn main() -> anyhow::Result<()> {
             let gui = gui.clone();
             move |cc| {
                 let ctx = cc.egui_ctx.clone();
+                fonts::install(&ctx);
                 gui.get_or_init(|| ctx.clone());
                 let repaint: Repaint = Arc::new(move || {
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
