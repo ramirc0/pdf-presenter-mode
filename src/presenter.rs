@@ -137,4 +137,12 @@ impl eframe::App for Console {
         }
         self.show_projector(ui.ctx());
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.stage
+            .lock()
+            .expect("stage poisoned")
+            .settings()
+            .save(storage);
+    }
 }

@@ -1,5 +1,7 @@
 //! The state of a running talk, free of any GUI.
 
+use crate::settings::Settings;
+
 /// Something the speaker asks for, from a key or a click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -13,6 +15,12 @@ pub enum Action {
     Last,
     /// Swap what the two windows show.
     Swap,
+    /// Switch between the two presenter layouts.
+    Layout,
+    /// Make the notes larger.
+    BiggerNotes,
+    /// Make the notes smaller.
+    SmallerNotes,
     /// Toggle fullscreen for the window the key went to.
     Fullscreen,
     /// Show or hide the shortcut hint.
@@ -38,17 +46,19 @@ pub struct Talk {
     slide: usize,
     slides: usize,
     swapped: bool,
+    settings: Settings,
     help: bool,
     quit_armed: bool,
 }
 
 impl Talk {
-    /// Starts a talk on the first of `slides` slides.
-    pub fn new(slides: usize) -> Self {
+    /// Starts a talk on the first of `slides` slides, with the presenter preferences `settings`.
+    pub fn new(slides: usize, settings: Settings) -> Self {
         Self {
             slide: 0,
             slides,
             swapped: false,
+            settings,
             help: false,
             quit_armed: false,
         }
@@ -72,6 +82,16 @@ impl Talk {
     /// Whether the presenter window shows the audience view and the other way around.
     pub fn swapped(&self) -> bool {
         self.swapped
+    }
+
+    /// The presenter preferences, changed by the layout and notes size keys.
+    pub fn settings(&self) -> Settings {
+        self.settings
+    }
+
+    /// The presenter preferences, for dragging a split.
+    pub fn settings_mut(&mut self) -> &mut Settings {
+        &mut self.settings
     }
 
     /// Whether the shortcut hint is open.
@@ -101,6 +121,9 @@ impl Talk {
             Action::First => self.slide = 0,
             Action::Last => self.slide = last,
             Action::Swap => self.swapped = !self.swapped,
+            Action::Layout => self.settings.layout = self.settings.layout.other(),
+            Action::BiggerNotes => self.settings.bigger_notes(),
+            Action::SmallerNotes => self.settings.smaller_notes(),
             Action::Help => self.help = !self.help,
             Action::Cancel => self.help = false,
             // The window that got the key toggles its own fullscreen.
@@ -117,7 +140,7 @@ mod tests {
 
     #[test]
     fn navigation_stays_inside_the_deck() {
-        let mut talk = Talk::new(3);
+        let mut talk = Talk::new(3, Settings::default());
         talk.apply(Action::Previous);
         assert_eq!(talk.slide(), 0);
         talk.apply(Action::Next);
@@ -134,7 +157,7 @@ mod tests {
 
     #[test]
     fn an_empty_deck_has_no_next_slide() {
-        let mut talk = Talk::new(0);
+        let mut talk = Talk::new(0, Settings::default());
         talk.apply(Action::Next);
         assert_eq!(talk.slide(), 0);
         assert_eq!(talk.next_slide(), None);
@@ -142,7 +165,7 @@ mod tests {
 
     #[test]
     fn swap_toggles_and_keeps_the_slide() {
-        let mut talk = Talk::new(3);
+        let mut talk = Talk::new(3, Settings::default());
         talk.apply(Action::Next);
         talk.apply(Action::Swap);
         assert!(talk.swapped());
@@ -152,8 +175,20 @@ mod tests {
     }
 
     #[test]
+    fn layout_toggles_and_notes_resize() {
+        let mut talk = Talk::new(3, Settings::default());
+        talk.apply(Action::Layout);
+        assert_eq!(talk.settings().layout, crate::settings::Layout::NotesFirst);
+        let scale = talk.settings().notes_scale;
+        talk.apply(Action::BiggerNotes);
+        assert!(talk.settings().notes_scale > scale);
+        talk.apply(Action::SmallerNotes);
+        assert!((talk.settings().notes_scale - scale).abs() < 1e-4);
+    }
+
+    #[test]
     fn the_hint_toggles_and_escape_closes_it() {
-        let mut talk = Talk::new(3);
+        let mut talk = Talk::new(3, Settings::default());
         talk.apply(Action::Help);
         assert!(talk.help());
         talk.apply(Action::Help);
@@ -165,7 +200,7 @@ mod tests {
 
     #[test]
     fn quit_needs_two_requests_in_a_row() {
-        let mut talk = Talk::new(3);
+        let mut talk = Talk::new(3, Settings::default());
         assert_eq!(talk.apply(Action::Quit), Outcome::Continue);
         assert!(talk.quit_armed());
         assert_eq!(talk.apply(Action::Next), Outcome::Continue);

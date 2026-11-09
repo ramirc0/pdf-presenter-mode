@@ -9,6 +9,7 @@ use crate::deck::PageSize;
 use crate::keys;
 use crate::pdfpc::Notes;
 use crate::render::{Renderer, Target, place};
+use crate::settings::{Layout, Settings};
 use crate::talk::{Action, Outcome, Talk};
 
 /// One of the app's two windows.
@@ -29,18 +30,6 @@ pub enum View {
     Audience,
 }
 
-/// Where a window draws, in points, and its scale.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Area {
-    /// The drawable rect in points.
-    pub rect: egui::Rect,
-    /// Physical pixels per point.
-    pub pixels_per_point: f32,
-}
-
-/// How much larger notes are than egui's default text.
-const NOTES_SCALE: f32 = 1.75;
-
 /// Repaints every window. The render worker and key handling share it.
 pub type Repaint = Arc<dyn Fn() + Send + Sync>;
 
@@ -51,24 +40,36 @@ pub struct Stage {
     markdown: CommonMarkCache,
     talk: Talk,
     renderer: Renderer,
-    areas: [Option<Area>; 2],
+    /// The renders each window drew in its last frame, most important first.
+    shown: [Vec<Target>; 2],
     repaint: Repaint,
 }
 
 impl Stage {
-    /// Presents `pages` from the first slide, with `notes` in the presenter view.
-    /// `repaint` must repaint both windows.
-    pub fn new(pages: Vec<PageSize>, notes: Notes, renderer: Renderer, repaint: Repaint) -> Self {
-        let talk = Talk::new(pages.len());
+    /// Presents `pages` from the first slide, with `notes` in the presenter view arranged
+    /// by `settings`. `repaint` must repaint both windows.
+    pub fn new(
+        pages: Vec<PageSize>,
+        notes: Notes,
+        settings: Settings,
+        renderer: Renderer,
+        repaint: Repaint,
+    ) -> Self {
+        let talk = Talk::new(pages.len(), settings);
         Self {
             pages,
             notes,
             markdown: CommonMarkCache::default(),
             talk,
             renderer,
-            areas: [None, None],
+            shown: [Vec::new(), Vec::new()],
             repaint,
         }
+    }
+
+    /// The presenter preferences, to save on exit.
+    pub fn settings(&self) -> Settings {
+        self.talk.settings()
     }
 
     /// Applies the keys pressed in the window `ui` belongs to.
@@ -93,73 +94,146 @@ impl Stage {
 
     /// Stops rendering for `window`, which has closed.
     pub fn close(&mut self, window: Window) {
-        self.areas[window as usize] = None;
+        self.shown[window as usize].clear();
     }
 
     /// Draws `window`'s view into `ui`.
     pub fn draw(&mut self, ui: &mut egui::Ui, window: Window) {
-        let view = view_of(window, self.talk.swapped());
-        let window_rect = ui.max_rect();
-        let (slide_rect, notes_rect) = if view == View::Presenter && !self.notes.is_empty() {
-            let (slide, notes) = window_rect.split_top_bottom_at_fraction(0.6);
-            (slide, Some(notes))
-        } else {
-            (window_rect, None)
-        };
-        let area = Area {
-            rect: slide_rect,
-            pixels_per_point: ui.ctx().pixels_per_point(),
-        };
-        self.areas[window as usize] = Some(area);
-        let wanted = plan(&self.pages, &self.talk, self.areas.iter().flatten());
-        self.renderer.request(wanted);
-
+        self.shown[window as usize].clear();
         ui.painter()
-            .rect_filled(window_rect, 0.0, egui::Color32::BLACK);
-        if let Some(rect) = notes_rect
-            && let Some(note) = self.notes.on_page(self.talk.slide())
-        {
-            let mut notes_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(16.0)));
-            let style = notes_ui.style_mut();
-            enlarge_text(style, NOTES_SCALE);
-            // Brighter than egui's dark gray, while bold stays white.
-            style.visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(210);
-            egui::ScrollArea::vertical().show(&mut notes_ui, |ui| {
-                if self.notes.plain_text {
-                    ui.label(note);
-                } else {
-                    CommonMarkViewer::new().show(ui, &mut self.markdown, note);
-                }
-            });
+            .rect_filled(ui.max_rect(), 0.0, egui::Color32::BLACK);
+        match view_of(window, self.talk.swapped()) {
+            View::Audience => {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                self.show_slide(ui, window, Some(self.talk.slide()), ui.max_rect());
+            }
+            View::Presenter => self.draw_presenter(ui, window),
         }
-        let painter = ui.painter();
-        if view == View::Audience {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        let wanted = plan(self.pages.len(), self.shown.iter().flatten());
+        self.renderer.request(wanted);
+    }
+
+    fn draw_presenter(&mut self, ui: &mut egui::Ui, window: Window) {
+        egui::Panel::bottom("status")
+            .frame(egui::Frame::NONE.inner_margin(8))
+            .show(ui, |ui| self.show_status(ui));
+        let body = ui.available_rect_before_wrap();
+        let layout = self.talk.settings().layout;
+        let splits = self.talk.settings_mut().splits_mut();
+        let (left, right) = split(ui, "columns", body, &mut splits.columns, true);
+        let side = match layout {
+            Layout::SlidesFirst => right,
+            Layout::NotesFirst => left,
+        };
+        let (top, bottom) = split(ui, "rows", side, &mut splits.rows, false);
+        let [left, right, top, bottom] = [left, right, top, bottom].map(|r| r.shrink(MARGIN));
+        let (current, next) = (Some(self.talk.slide()), self.talk.next_slide());
+        match layout {
+            Layout::SlidesFirst => {
+                self.show_slide(ui, window, current, left);
+                self.show_slide(ui, window, next, top);
+                self.show_notes(ui, bottom);
+            }
+            Layout::NotesFirst => {
+                self.show_slide(ui, window, current, top);
+                self.show_slide(ui, window, next, bottom);
+                self.show_notes(ui, right);
+            }
         }
-        let current = (self.talk.slides() > 0)
-            .then(|| place_in(&self.pages, self.talk.slide(), area))
-            .flatten();
-        if let Some(current) = current
-            && let Some(texture) = self.renderer.texture(current.target)
-        {
-            let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-            painter.image(texture.id(), current.rect, uv, egui::Color32::WHITE);
-        }
-        if view == View::Presenter && self.talk.quit_armed() {
-            // A dark backing keeps the hint readable over a white slide.
-            let galley = painter.layout_no_wrap(
-                "Press q again to quit".into(),
-                egui::FontId::proportional(18.0),
-                egui::Color32::WHITE,
-            );
-            let origin = area.rect.left_bottom() + egui::vec2(16.0, -16.0 - galley.size().y);
-            let backing = egui::Rect::from_min_size(origin, galley.size()).expand(6.0);
-            painter.rect_filled(backing, 4.0, egui::Color32::from_black_alpha(200));
-            painter.galley(origin, galley, egui::Color32::WHITE);
-        }
-        if view == View::Presenter && self.talk.help() {
+        if self.talk.help() {
             show_shortcuts(ui);
         }
+    }
+
+    /// Draws `page`, if the deck has it, fitted into `rect`, and records the render it needs.
+    fn show_slide(&mut self, ui: &egui::Ui, window: Window, page: Option<usize>, rect: egui::Rect) {
+        let Some(page) = page.filter(|&page| page < self.pages.len()) else {
+            return;
+        };
+        let Some(placed) = place(page, self.pages[page], rect, ui.ctx().pixels_per_point()) else {
+            return;
+        };
+        self.shown[window as usize].push(placed.target);
+        if let Some(texture) = self.renderer.texture(placed.target) {
+            let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            ui.painter()
+                .image(texture.id(), placed.rect, uv, egui::Color32::WHITE);
+        }
+    }
+
+    fn show_notes(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let Some(note) = self.notes.on_page(self.talk.slide()) else {
+            return;
+        };
+        let mut notes_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        let style = notes_ui.style_mut();
+        enlarge_text(style, self.talk.settings().notes_scale);
+        // Brighter than egui's dark gray, while bold stays white.
+        style.visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(210);
+        egui::ScrollArea::vertical().show(&mut notes_ui, |ui| {
+            if self.notes.plain_text {
+                ui.label(note);
+            } else {
+                CommonMarkViewer::new().show(ui, &mut self.markdown, note);
+            }
+        });
+    }
+
+    fn show_status(&self, ui: &mut egui::Ui) {
+        enlarge_text(ui.style_mut(), 1.4);
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "slide {} / {}",
+                self.talk.slide() + 1,
+                self.talk.slides()
+            ));
+            if self.talk.quit_armed() {
+                ui.colored_label(ui.visuals().warn_fg_color, "Press q again to quit");
+            }
+        });
+    }
+}
+
+/// The gap in points between a panel's edge and its content.
+const MARGIN: f32 = 8.0;
+
+/// Splits `rect` side by side or top to bottom, giving the first part `share` of it.
+/// Dragging the seam changes `share`, within 0.1 to 0.9.
+fn split(
+    ui: &egui::Ui,
+    name: &str,
+    rect: egui::Rect,
+    share: &mut f32,
+    side_by_side: bool,
+) -> (egui::Rect, egui::Rect) {
+    let axis = usize::from(!side_by_side);
+    let length = rect.size()[axis];
+    let seam = |share: f32| rect.min[axis] + length * share;
+    let at = seam(*share);
+    let handle = if side_by_side {
+        egui::Rect::from_x_y_ranges(at - MARGIN..=at + MARGIN, rect.y_range())
+    } else {
+        egui::Rect::from_x_y_ranges(rect.x_range(), at - MARGIN..=at + MARGIN)
+    };
+    let response = ui.interact(handle, ui.scope_id().with(name), egui::Sense::drag());
+    if response.dragged() && length > 0.0 {
+        *share = (*share + response.drag_delta()[axis] / length).clamp(0.1, 0.9);
+    }
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(if side_by_side {
+            egui::CursorIcon::ResizeHorizontal
+        } else {
+            egui::CursorIcon::ResizeVertical
+        });
+    }
+    let at = seam(*share);
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    if side_by_side {
+        ui.painter().vline(at, rect.y_range(), stroke);
+        rect.split_left_right_at_x(at)
+    } else {
+        ui.painter().hline(rect.x_range(), at, stroke);
+        rect.split_top_bottom_at_y(at)
     }
 }
 
@@ -173,6 +247,7 @@ fn enlarge_text(style: &mut egui::Style, factor: f32) {
 /// The shortcut hint, built from the key table: keys without a modifier, then the Alt layer.
 fn show_shortcuts(ui: &egui::Ui) {
     egui::Area::new(egui::Id::unique("shortcuts"))
+        .fade_in(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ui.ctx(), |ui| {
             enlarge_text(ui.style_mut(), 1.4);
@@ -205,26 +280,18 @@ fn view_of(window: Window, swapped: bool) -> View {
     }
 }
 
-fn place_in(pages: &[PageSize], index: usize, area: Area) -> Option<crate::render::Placement> {
-    place(index, pages[index], area.rect, area.pixels_per_point)
-}
-
-/// The renders the windows need, most urgent first: every on-screen slide,
-/// then the next slide at each window's size.
-fn plan<'a>(
-    pages: &[PageSize],
-    talk: &Talk,
-    areas: impl Iterator<Item = &'a Area> + Clone,
-) -> Vec<Target> {
-    let mut wanted = Vec::new();
-    let slides = [Some(talk.slide()), talk.next_slide()];
-    for slide in slides.into_iter().flatten().filter(|&s| s < pages.len()) {
-        for area in areas.clone() {
-            if let Some(placed) = place_in(pages, slide, *area)
-                && !wanted.contains(&placed.target)
-            {
-                wanted.push(placed.target);
-            }
+/// The renders the windows need, most urgent first: everything on screen, then for each
+/// page on screen the page after it at the same size. That covers the next slide at the
+/// audience and current sizes, and the one after it at the next-slide panel's size.
+fn plan<'a>(pages: usize, shown: impl Iterator<Item = &'a Target> + Clone) -> Vec<Target> {
+    let ahead = shown.clone().map(|target| Target {
+        page: target.page + 1,
+        ..*target
+    });
+    let mut wanted: Vec<Target> = Vec::new();
+    for target in shown.copied().chain(ahead) {
+        if target.page < pages && !wanted.contains(&target) {
+            wanted.push(target);
         }
     }
     wanted
@@ -234,54 +301,40 @@ fn plan<'a>(
 mod tests {
     use super::*;
 
-    fn area(width: f32, height: f32) -> Area {
-        Area {
-            rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height)),
-            pixels_per_point: 1.0,
+    fn at(page: usize, width: u16) -> Target {
+        Target {
+            page,
+            width,
+            height: width / 2,
         }
     }
 
-    fn deck(slides: usize) -> Vec<PageSize> {
-        vec![
-            PageSize {
-                width: 160.0,
-                height: 90.0
-            };
-            slides
-        ]
-    }
-
     #[test]
-    fn on_screen_slides_come_before_the_next_slide() {
-        let talk = Talk::new(3);
-        let areas = [area(1920.0, 1080.0), area(640.0, 360.0)];
-        let wanted = plan(&deck(3), &talk, areas.iter());
+    fn on_screen_pages_come_before_the_pages_after_them() {
+        let shown = [at(0, 1920), at(0, 640), at(1, 400)];
+        let wanted = plan(3, shown.iter());
         let summary: Vec<_> = wanted.iter().map(|t| (t.page, t.width)).collect();
-        assert_eq!(summary, [(0, 1920), (0, 640), (1, 1920), (1, 640)]);
+        assert_eq!(
+            summary,
+            [(0, 1920), (0, 640), (1, 400), (1, 1920), (1, 640), (2, 400)]
+        );
     }
 
     #[test]
-    fn the_last_slide_has_nothing_to_prefetch() {
-        let mut talk = Talk::new(2);
-        talk.apply(Action::Last);
-        let areas = [area(1920.0, 1080.0)];
-        let wanted = plan(&deck(2), &talk, areas.iter());
-        assert_eq!(wanted.len(), 1);
-        assert_eq!(wanted[0].page, 1);
+    fn the_last_page_has_nothing_after_it() {
+        let shown = [at(1, 1920)];
+        assert_eq!(plan(2, shown.iter()), [at(1, 1920)]);
     }
 
     #[test]
     fn same_sized_windows_share_renders() {
-        let talk = Talk::new(2);
-        let areas = [area(800.0, 450.0), area(800.0, 450.0)];
-        assert_eq!(plan(&deck(2), &talk, areas.iter()).len(), 2);
+        let shown = [at(0, 800), at(0, 800)];
+        assert_eq!(plan(2, shown.iter()).len(), 2);
     }
 
     #[test]
-    fn an_empty_deck_needs_nothing() {
-        let talk = Talk::new(0);
-        let areas = [area(800.0, 450.0)];
-        assert!(plan(&[], &talk, areas.iter()).is_empty());
+    fn nothing_on_screen_needs_nothing() {
+        assert!(plan(3, [].iter()).is_empty());
     }
 
     #[test]

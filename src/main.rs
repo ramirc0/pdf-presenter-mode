@@ -8,6 +8,7 @@ mod monitors;
 mod pdfpc;
 mod presenter;
 mod render;
+mod settings;
 mod stage;
 mod talk;
 
@@ -27,6 +28,7 @@ use crate::logging::StderrLog;
 use crate::monitors::Monitors;
 use crate::presenter::{Console, Projector, projector_id};
 use crate::render::Renderer;
+use crate::settings::Settings;
 use crate::stage::{Repaint, Stage};
 
 /// Present a PDF slide deck.
@@ -71,6 +73,8 @@ fn main() -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("ppm")
             .with_app_id("ppm"),
+        // The monitor logic places the windows. A restored position would fight it.
+        persist_window: false,
         ..Default::default()
     };
     let eframe = eframe::create_native(
@@ -93,7 +97,13 @@ fn main() -> anyhow::Result<()> {
                 let renderer = Renderer::new(cc.egui_ctx.clone(), deck.pdf, move || {
                     worker_repaint();
                 });
-                let stage = Stage::new(deck.pages, deck.notes, renderer, repaint);
+                let stage = Stage::new(
+                    deck.pages,
+                    deck.notes,
+                    Settings::load(cc.storage),
+                    renderer,
+                    repaint,
+                );
                 Ok(Box::new(Console::new(
                     Arc::new(Mutex::new(stage)),
                     monitors,

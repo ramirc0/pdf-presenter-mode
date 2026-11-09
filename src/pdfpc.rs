@@ -55,11 +55,6 @@ impl Notes {
         })
     }
 
-    /// Whether no page has a note.
-    pub fn is_empty(&self) -> bool {
-        self.pages.is_empty()
-    }
-
     /// The note for page `index`, counting from 0, if it has one.
     pub fn on_page(&self, index: usize) -> Option<&str> {
         self.pages.get(&index).map(String::as_str)

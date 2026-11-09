@@ -74,6 +74,24 @@ pub const BINDINGS: &[Binding] = &[
         does: "quit, when pressed twice",
     },
     Binding {
+        keys: &[Key::V],
+        alt: true,
+        action: Action::Layout,
+        does: "switch the presenter layout",
+    },
+    Binding {
+        keys: &[Key::Plus, Key::Equals],
+        alt: true,
+        action: Action::BiggerNotes,
+        does: "larger notes",
+    },
+    Binding {
+        keys: &[Key::Minus],
+        alt: true,
+        action: Action::SmallerNotes,
+        does: "smaller notes",
+    },
+    Binding {
         keys: &[Key::X],
         alt: true,
         action: Action::Swap,

@@ -7,6 +7,8 @@ ppm=$(realpath "$1")
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 failures=0
+# eframe saves settings under XDG_DATA_HOME. Keep the user's out of reach.
+export XDG_DATA_HOME=$work/data
 
 cleanup() {
   pkill -x -P "$$" ppm 2>/dev/null || true
