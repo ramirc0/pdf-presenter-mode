@@ -5,6 +5,7 @@ mod fonts;
 mod keys;
 mod logging;
 mod monitors;
+mod pdfpc;
 mod presenter;
 mod render;
 mod stage;
@@ -34,6 +35,9 @@ use crate::stage::{Repaint, Stage};
 struct Cli {
     /// The PDF to present.
     deck: PathBuf,
+    /// Read speaker notes from this pdfpc file instead of the PDF's attachment or `<deck>.pdfpc`.
+    #[arg(long, value_name = "FILE")]
+    notes: Option<PathBuf>,
     /// Put the audience window on this connector, such as DP-6, instead of the first external monitor.
     #[arg(long, value_name = "CONNECTOR")]
     audience: Option<String>,
@@ -51,7 +55,7 @@ fn main() -> anyhow::Result<()> {
     log::set_logger(&LOG)?;
     log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
-    let deck = Deck::open(&cli.deck)?;
+    let deck = Deck::open(&cli.deck, cli.notes.as_deref())?;
     let projector = if cli.windowed_audience {
         Projector::Windowed
     } else {
@@ -87,7 +91,7 @@ fn main() -> anyhow::Result<()> {
                 let renderer = Renderer::new(cc.egui_ctx.clone(), deck.pdf, move || {
                     worker_repaint();
                 });
-                let stage = Stage::new(deck.pages, renderer, repaint);
+                let stage = Stage::new(deck.pages, deck.notes, renderer, repaint);
                 Ok(Box::new(Console::new(
                     Arc::new(Mutex::new(stage)),
                     monitors,

@@ -6,6 +6,7 @@ use eframe::egui;
 
 use crate::deck::PageSize;
 use crate::keys;
+use crate::pdfpc::Notes;
 use crate::render::{Renderer, Target, place};
 use crate::talk::{Outcome, Talk};
 
@@ -42,6 +43,7 @@ pub type Repaint = Arc<dyn Fn() + Send + Sync>;
 /// Shared state of both windows.
 pub struct Stage {
     pages: Vec<PageSize>,
+    notes: Notes,
     talk: Talk,
     renderer: Renderer,
     areas: [Option<Area>; 2],
@@ -49,11 +51,13 @@ pub struct Stage {
 }
 
 impl Stage {
-    /// Presents `pages` from the first slide. `repaint` must repaint both windows.
-    pub fn new(pages: Vec<PageSize>, renderer: Renderer, repaint: Repaint) -> Self {
+    /// Presents `pages` from the first slide, with `notes` in the presenter view.
+    /// `repaint` must repaint both windows.
+    pub fn new(pages: Vec<PageSize>, notes: Notes, renderer: Renderer, repaint: Repaint) -> Self {
         let talk = Talk::new(pages.len());
         Self {
             pages,
+            notes,
             talk,
             renderer,
             areas: [None, None],
@@ -83,17 +87,37 @@ impl Stage {
 
     /// Draws `window`'s view into `ui`.
     pub fn draw(&mut self, ui: &mut egui::Ui, window: Window) {
+        let view = view_of(window, self.talk.swapped());
+        let window_rect = ui.max_rect();
+        let (slide_rect, notes_rect) = if view == View::Presenter && !self.notes.is_empty() {
+            let (slide, notes) = window_rect.split_top_bottom_at_fraction(0.6);
+            (slide, Some(notes))
+        } else {
+            (window_rect, None)
+        };
         let area = Area {
-            rect: ui.max_rect(),
+            rect: slide_rect,
             pixels_per_point: ui.ctx().pixels_per_point(),
         };
         self.areas[window as usize] = Some(area);
         let wanted = plan(&self.pages, &self.talk, self.areas.iter().flatten());
         self.renderer.request(wanted);
 
-        let view = view_of(window, self.talk.swapped());
+        ui.painter()
+            .rect_filled(window_rect, 0.0, egui::Color32::BLACK);
+        if let Some(rect) = notes_rect
+            && let Some(note) = self.notes.on_page(self.talk.slide())
+        {
+            let mut notes_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(16.0)));
+            egui::ScrollArea::vertical().show(&mut notes_ui, |ui| {
+                ui.label(
+                    egui::RichText::new(note)
+                        .size(22.0)
+                        .color(egui::Color32::WHITE),
+                );
+            });
+        }
         let painter = ui.painter();
-        painter.rect_filled(area.rect, 0.0, egui::Color32::BLACK);
         if view == View::Audience {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }

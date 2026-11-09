@@ -1,10 +1,14 @@
-//! Loading a slide deck from a PDF file.
+//! Loading a slide deck from a PDF file, with its speaker notes.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use hayro::hayro_syntax::Pdf;
+use hayro::hayro_syntax::object::dict::keys::{EF, EMBEDDED_FILES, F, KIDS, NAMES};
+use hayro::hayro_syntax::object::{Array, Dict, Stream};
+
+use crate::pdfpc::Notes;
 
 /// The size of a page in PDF points, after its rotation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -15,23 +19,30 @@ pub struct PageSize {
     pub height: f32,
 }
 
-/// A parsed PDF and the size of each of its pages.
+/// A parsed PDF, the size of each of its pages, and its speaker notes.
 pub struct Deck {
     /// The parsed document, shared with the render worker.
     pub pdf: Arc<Pdf>,
     /// One entry per page, in page order.
     pub pages: Vec<PageSize>,
+    /// The speaker notes, empty if the deck has none.
+    pub notes: Notes,
 }
 
 impl Deck {
-    /// Reads and parses the PDF at `path`.
+    /// Reads and parses the PDF at `path`, and the notes for it.
+    ///
+    /// The notes come from the pdfpc file `notes` if given. Otherwise they come from an
+    /// attached file whose name ends in `.pdfpc`, then from `<deck>.pdfpc` beside the PDF.
+    /// A broken attachment or sidecar only logs a warning, so the talk can go on.
     ///
     /// # Errors
     ///
-    /// Fails if the file cannot be read, does not end in `%%EOF`, or does not parse.
+    /// Fails if the PDF cannot be read, does not end in `%%EOF`, or does not parse,
+    /// or if `notes` is given and cannot be read or parsed.
     /// The `%%EOF` check matters because hayro rebuilds a broken cross-reference
     /// table, so a half-written file could otherwise open with pages missing.
-    pub fn open(path: &Path) -> anyhow::Result<Self> {
+    pub fn open(path: &Path, notes: Option<&Path>) -> anyhow::Result<Self> {
         let data =
             std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
         if !data.trim_ascii_end().ends_with(b"%%EOF") {
@@ -47,11 +58,70 @@ impl Deck {
                 PageSize { width, height }
             })
             .collect();
+        let notes = match notes {
+            Some(notes) => read_notes(notes)?,
+            None => notes_beside(&pdf, path),
+        };
         Ok(Self {
             pdf: Arc::new(pdf),
             pages,
+            notes,
         })
     }
+}
+
+fn read_notes(path: &Path) -> anyhow::Result<Notes> {
+    let json = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    Notes::from_pdfpc(&json).with_context(|| format!("cannot parse {}", path.display()))
+}
+
+/// The attached notes, else the sidecar notes, else none.
+fn notes_beside(pdf: &Pdf, path: &Path) -> Notes {
+    let (source, notes) = match attached_pdfpc(pdf) {
+        Some(json) => (
+            format!("the notes attached to {}", path.display()),
+            Notes::from_pdfpc(&json).map_err(anyhow::Error::from),
+        ),
+        None => {
+            let sidecar = path.with_extension("pdfpc");
+            if !sidecar.exists() {
+                return Notes::default();
+            }
+            (sidecar.display().to_string(), read_notes(&sidecar))
+        }
+    };
+    notes.unwrap_or_else(|err| {
+        log::warn!("ignoring {source}: {err:#}");
+        Notes::default()
+    })
+}
+
+/// The contents of the first attached file whose name ends in `.pdfpc`.
+/// Typst names an attachment by its path relative to `--root`, so only the end is fixed.
+fn attached_pdfpc(pdf: &Pdf) -> Option<Vec<u8>> {
+    let root: Dict = pdf.xref().get(pdf.xref().root_id())?;
+    let files: Dict = root.get::<Dict>(NAMES)?.get(EMBEDDED_FILES)?;
+    pdfpc_in(&files)
+}
+
+/// Searches a node of the `/EmbeddedFiles` name tree and its kids.
+fn pdfpc_in(node: &Dict) -> Option<Vec<u8>> {
+    if let Some(names) = node.get::<Array>(NAMES) {
+        // The array alternates names and file specifications.
+        let mut entries = names.flex_iter();
+        while let (Some(name), Some(spec)) = (
+            entries.next::<hayro::hayro_syntax::object::String>(),
+            entries.next::<Dict>(),
+        ) {
+            if name.as_bytes().ends_with(b".pdfpc") {
+                let file: Stream = spec.get::<Dict>(EF)?.get(F)?;
+                return file.decoded().ok().map(|data| data.into_owned());
+            }
+        }
+    }
+    node.get::<Array>(KIDS)?
+        .iter::<Dict>()
+        .find_map(|kid| pdfpc_in(&kid))
 }
 
 #[cfg(test)]
@@ -66,7 +136,7 @@ mod tests {
 
     #[test]
     fn opens_a_typslides_deck() {
-        let deck = Deck::open(&fixture("basic.pdf")).unwrap();
+        let deck = Deck::open(&fixture("basic.pdf"), None).unwrap();
         assert!(deck.pages.len() >= 3);
         for page in &deck.pages {
             assert!((page.width / page.height - 16.0 / 9.0).abs() < 0.01);
@@ -75,12 +145,55 @@ mod tests {
 
     #[test]
     fn rejects_a_truncated_pdf() {
-        let err = Deck::open(&fixture("truncated.pdf")).err().unwrap();
+        let err = Deck::open(&fixture("truncated.pdf"), None).err().unwrap();
         assert!(err.to_string().contains("%%EOF"), "{err}");
     }
 
     #[test]
     fn reports_a_missing_file() {
-        assert!(Deck::open(&fixture("missing.pdf")).is_err());
+        assert!(Deck::open(&fixture("missing.pdf"), None).is_err());
+    }
+
+    #[test]
+    fn reads_attached_notes_before_a_sidecar() {
+        let deck = Deck::open(&fixture("notes.pdf"), None).unwrap();
+        assert_eq!(deck.notes.on_page(0), None);
+        assert_eq!(
+            deck.notes.on_page(1),
+            Some("Page 2, first note.\n\nPage 2, second note.")
+        );
+        let expected = [
+            (2, "Page 3, before the break."),
+            (3, "Page 4, after the break."),
+            (4, "Page 5, inside cols."),
+            (5, "Page 6, inside framed."),
+            (6, "Page 7, inside focus-slide."),
+        ];
+        for (page, note) in expected {
+            assert_eq!(deck.notes.on_page(page), Some(note), "page {page}");
+        }
+        assert!(deck.notes.on_page(7).unwrap().contains("**bold**"));
+        assert_eq!(deck.notes.on_page(8), None);
+    }
+
+    #[test]
+    fn reads_a_sidecar_beside_the_deck() {
+        let deck = Deck::open(&fixture("basic.pdf"), None).unwrap();
+        assert_eq!(deck.notes.on_page(0), Some("Sidecar note."));
+    }
+
+    #[test]
+    fn a_notes_file_wins_over_the_attachment() {
+        let deck = Deck::open(&fixture("notes.pdf"), Some(&fixture("basic.pdfpc"))).unwrap();
+        assert_eq!(deck.notes.on_page(0), Some("Sidecar note."));
+        assert_eq!(deck.notes.on_page(1), None);
+    }
+
+    #[test]
+    fn reports_a_missing_notes_file() {
+        let err = Deck::open(&fixture("basic.pdf"), Some(&fixture("missing.pdfpc")))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("missing.pdfpc"), "{err}");
     }
 }

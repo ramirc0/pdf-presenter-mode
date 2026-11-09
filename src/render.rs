@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn every_fixture_page_renders_at_the_requested_size_onto_white() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/basic.pdf");
-        let deck = Deck::open(&path).unwrap();
+        let deck = Deck::open(&path, None).unwrap();
         let pages = deck.pdf.pages();
         let mut painter = Painter::new();
         for (index, page) in pages.iter().enumerate() {
