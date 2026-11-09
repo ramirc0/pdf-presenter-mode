@@ -2,6 +2,7 @@
 
 mod deck;
 mod keys;
+mod logging;
 mod presenter;
 mod render;
 mod talk;
@@ -16,6 +17,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::WindowId;
 
 use crate::deck::Deck;
+use crate::logging::StderrLog;
 use crate::presenter::Presenter;
 use crate::render::Renderer;
 
@@ -27,7 +29,11 @@ struct Cli {
     deck: PathBuf,
 }
 
+static LOG: StderrLog = StderrLog::new();
+
 fn main() -> anyhow::Result<()> {
+    log::set_logger(&LOG)?;
+    log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
     let deck = Deck::open(&cli.deck)?;
 
@@ -48,6 +54,11 @@ fn main() -> anyhow::Result<()> {
         &event_loop,
     );
     event_loop.run_app(&mut Windows { eframe })?;
+    if LOG.failed() {
+        anyhow::bail!(
+            "ppm stopped after the error above. A Nix build outside NixOS needs nixGL for its GL driver: `nixGLIntel ppm DECK`"
+        );
+    }
     Ok(())
 }
 
