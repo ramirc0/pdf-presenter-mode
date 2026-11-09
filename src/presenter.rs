@@ -1,66 +1,115 @@
-//! The speaker's window.
+//! The root window, and the projector window it opens, moves and closes.
+
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
-use crate::deck::Deck;
-use crate::keys;
-use crate::render::{Renderer, place};
-use crate::talk::{Outcome, Talk};
+use crate::monitors::{Monitors, audience_monitor};
+use crate::stage::{Stage, Window};
+use crate::talk::Outcome;
 
-/// The presenter window: for now, the current slide, letterboxed on black.
-pub struct Presenter {
-    deck: Deck,
-    talk: Talk,
-    renderer: Renderer,
+/// Where the projector window goes.
+pub enum Projector {
+    /// Fullscreen on a monitor: the requested connector, or else the first external one.
+    Monitor {
+        /// A connector name such as `DP-6`, from `--audience`.
+        requested: Option<String>,
+    },
+    /// A normal window, for rehearsal and screen sharing.
+    Windowed,
 }
 
-impl Presenter {
-    /// Presents `deck` from its first slide, rendering through `renderer`.
-    pub fn new(deck: Deck, renderer: Renderer) -> Self {
-        let talk = Talk::new(deck.pages.len());
+/// The viewport of the projector window.
+pub fn projector_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("projector")
+}
+
+/// The root window. Each frame it also decides where the projector window goes.
+pub struct Console {
+    stage: Arc<Mutex<Stage>>,
+    monitors: Monitors,
+    projector: Projector,
+    /// The monitor name the projector window is on, or `None` while it is closed.
+    shown_on: Option<String>,
+    /// The monitor list a missing `--audience` connector was last reported for.
+    reported_missing: Vec<String>,
+}
+
+impl Console {
+    /// A console over `stage`, placing the projector window by `projector` among `monitors`.
+    pub fn new(stage: Arc<Mutex<Stage>>, monitors: Monitors, projector: Projector) -> Self {
         Self {
-            deck,
-            talk,
-            renderer,
+            stage,
+            monitors,
+            projector,
+            shown_on: None,
+            reported_missing: Vec::new(),
         }
+    }
+
+    fn show_projector(&mut self, ctx: &egui::Context) {
+        let builder = egui::ViewportBuilder::default()
+            .with_title("ppm audience")
+            .with_app_id("ppm");
+        let placed = match &self.projector {
+            Projector::Windowed => Some((builder, String::from("window"))),
+            Projector::Monitor { requested } => {
+                let names = self.monitors.lock().expect("monitor list poisoned").clone();
+                if let Some(requested) = requested
+                    && !names.contains(requested)
+                    && names != self.reported_missing
+                {
+                    log::warn!(
+                        "monitor {requested} is not connected, so there is no audience window. Connected: {}",
+                        names.join(", ")
+                    );
+                    self.reported_missing.clone_from(&names);
+                }
+                audience_monitor(&names, requested.as_deref()).map(|index| {
+                    // egui only moves the window when the index changes. A replug can
+                    // change the monitor behind the same index.
+                    if self.shown_on.as_ref().is_some_and(|on| *on != names[index]) {
+                        ctx.send_viewport_cmd_to(
+                            projector_id(),
+                            egui::ViewportCommand::SetMonitor(index),
+                        );
+                    }
+                    (builder.with_monitor(index), names[index].clone())
+                })
+            }
+        };
+        let Some((builder, monitor)) = placed else {
+            // Not showing the viewport this frame closes it, so it cannot land on the laptop panel.
+            if self.shown_on.take().is_some() {
+                self.stage
+                    .lock()
+                    .expect("stage poisoned")
+                    .close(Window::Projector);
+            }
+            return;
+        };
+        self.shown_on = Some(monitor);
+        let stage = self.stage.clone();
+        ctx.show_viewport_deferred(projector_id(), builder, move |ui, _class| {
+            let mut stage = stage.lock().expect("stage poisoned");
+            if stage.handle_keys(ui) == Outcome::Quit {
+                ui.ctx()
+                    .send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+            }
+            stage.draw(ui, Window::Projector);
+        });
     }
 }
 
-impl eframe::App for Presenter {
+impl eframe::App for Console {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        for action in ui.input(keys::actions) {
-            if self.talk.apply(action) == Outcome::Quit {
+        {
+            let mut stage = self.stage.lock().expect("stage poisoned");
+            if stage.handle_keys(ui) == Outcome::Quit {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            stage.draw(ui, Window::Main);
         }
-
-        let area = ui.max_rect();
-        let painter = ui.painter();
-        painter.rect_filled(area, 0.0, egui::Color32::BLACK);
-        let pixels_per_point = ui.ctx().pixels_per_point();
-        let placed = |index: usize| place(index, self.deck.pages[index], area, pixels_per_point);
-
-        let current = (self.talk.slides() > 0)
-            .then(|| placed(self.talk.slide()))
-            .flatten();
-        let next = self.talk.next_slide().and_then(placed);
-        self.renderer
-            .request(current.iter().chain(&next).map(|p| p.target).collect());
-
-        if let Some(current) = current
-            && let Some(texture) = self.renderer.texture(current.target)
-        {
-            let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-            painter.image(texture.id(), current.rect, uv, egui::Color32::WHITE);
-        }
-        if self.talk.quit_armed() {
-            painter.text(
-                area.left_bottom() + egui::vec2(16.0, -16.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Press q again to quit",
-                egui::FontId::proportional(18.0),
-                egui::Color32::LIGHT_GRAY,
-            );
-        }
+        self.show_projector(ui.ctx());
     }
 }

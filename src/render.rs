@@ -88,15 +88,15 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Starts a worker that renders pages of `pdf` and repaints `ctx` when one is done.
+    /// Starts a worker that renders pages of `pdf` and calls `repaint` after each one.
+    /// Textures go to `ctx`.
     ///
     /// # Panics
     ///
     /// Panics if the operating system cannot start a thread.
-    pub fn new(ctx: egui::Context, pdf: Arc<Pdf>) -> Self {
+    pub fn new(ctx: egui::Context, pdf: Arc<Pdf>, repaint: impl Fn() + Send + 'static) -> Self {
         let (requests, jobs) = mpsc::channel();
         let (done, results) = mpsc::channel();
-        let repaint = ctx.clone();
         std::thread::Builder::new()
             .name("render".into())
             .spawn(move || work(&pdf, &jobs, &done, &repaint))
@@ -167,7 +167,7 @@ impl Renderer {
 }
 
 /// The worker loop: always serve the newest request, most urgent target first.
-fn work(pdf: &Pdf, jobs: &Receiver<Vec<Target>>, done: &Sender<Rendered>, ctx: &egui::Context) {
+fn work(pdf: &Pdf, jobs: &Receiver<Vec<Target>>, done: &Sender<Rendered>, repaint: &impl Fn()) {
     let pages = pdf.pages();
     let mut painter = Painter::new();
     let mut queue = VecDeque::new();
@@ -191,7 +191,7 @@ fn work(pdf: &Pdf, jobs: &Receiver<Vec<Target>>, done: &Sender<Rendered>, ctx: &
         if done.send(Rendered { target, image }).is_err() {
             return;
         }
-        ctx.request_repaint();
+        repaint();
     }
 }
 

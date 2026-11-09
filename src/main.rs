@@ -3,11 +3,14 @@
 mod deck;
 mod keys;
 mod logging;
+mod monitors;
 mod presenter;
 mod render;
+mod stage;
 mod talk;
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use clap::Parser;
 use eframe::{UserEvent, egui};
@@ -18,8 +21,10 @@ use winit::window::WindowId;
 
 use crate::deck::Deck;
 use crate::logging::StderrLog;
-use crate::presenter::Presenter;
+use crate::monitors::Monitors;
+use crate::presenter::{Console, Projector, projector_id};
 use crate::render::Renderer;
+use crate::stage::{Repaint, Stage};
 
 /// Present a PDF slide deck.
 #[derive(Parser)]
@@ -27,6 +32,12 @@ use crate::render::Renderer;
 struct Cli {
     /// The PDF to present.
     deck: PathBuf,
+    /// Put the audience window on this connector, such as DP-6, instead of the first external monitor.
+    #[arg(long, value_name = "CONNECTOR")]
+    audience: Option<String>,
+    /// Show the audience view as a normal window, for rehearsal and screen sharing.
+    #[arg(long, conflicts_with = "audience")]
+    windowed_audience: bool,
 }
 
 static LOG: StderrLog = StderrLog::new();
@@ -36,6 +47,15 @@ fn main() -> anyhow::Result<()> {
     log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
     let deck = Deck::open(&cli.deck)?;
+    let projector = if cli.windowed_audience {
+        Projector::Windowed
+    } else {
+        Projector::Monitor {
+            requested: cli.audience,
+        }
+    };
+    let monitors = Monitors::default();
+    let gui = Arc::new(OnceLock::new());
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let options = eframe::NativeOptions {
@@ -47,13 +67,35 @@ fn main() -> anyhow::Result<()> {
     let eframe = eframe::create_native(
         "ppm",
         options,
-        Box::new(|cc| {
-            let renderer = Renderer::new(cc.egui_ctx.clone(), deck.pdf.clone());
-            Ok(Box::new(Presenter::new(deck, renderer)))
+        Box::new({
+            let monitors = monitors.clone();
+            let gui = gui.clone();
+            move |cc| {
+                let ctx = cc.egui_ctx.clone();
+                gui.get_or_init(|| ctx.clone());
+                let repaint: Repaint = Arc::new(move || {
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                    ctx.request_repaint_of(projector_id());
+                });
+                let worker_repaint = repaint.clone();
+                let renderer = Renderer::new(cc.egui_ctx.clone(), deck.pdf, move || {
+                    worker_repaint();
+                });
+                let stage = Stage::new(deck.pages, renderer, repaint);
+                Ok(Box::new(Console::new(
+                    Arc::new(Mutex::new(stage)),
+                    monitors,
+                    projector,
+                )))
+            }
         }),
         &event_loop,
     );
-    event_loop.run_app(&mut Windows { eframe })?;
+    event_loop.run_app(&mut Windows {
+        eframe,
+        monitors,
+        gui,
+    })?;
     if LOG.failed() {
         anyhow::bail!(
             "ppm stopped after the error above. A Nix build outside NixOS needs nixGL for its GL driver: `nixGLIntel ppm DECK`"
@@ -65,10 +107,32 @@ fn main() -> anyhow::Result<()> {
 /// Runs eframe on our own winit loop, which gives access to the monitor list.
 struct Windows<'a> {
     eframe: eframe::EframeWinitApplication<'a>,
+    monitors: Monitors,
+    /// The GUI context, once eframe has created it.
+    gui: Arc<OnceLock<egui::Context>>,
+}
+
+impl Windows<'_> {
+    /// Updates the monitor names. A change repaints the root window, which places the projector.
+    /// Hotplug wakes the loop, so checking on every turn misses nothing.
+    fn track_monitors(&self, event_loop: &ActiveEventLoop) {
+        let names: Vec<String> = event_loop
+            .available_monitors()
+            .map(|monitor| monitor.name().unwrap_or_default())
+            .collect();
+        let mut current = self.monitors.lock().expect("monitor list poisoned");
+        if *current != names {
+            *current = names;
+            if let Some(ctx) = self.gui.get() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for Windows<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.track_monitors(event_loop);
         self.eframe.resumed(event_loop);
     }
 
@@ -88,6 +152,7 @@ impl ApplicationHandler<UserEvent> for Windows<'_> {
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, _: DeviceEvent) {}
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.track_monitors(event_loop);
         self.eframe.about_to_wait(event_loop);
     }
 
