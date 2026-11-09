@@ -35,7 +35,8 @@
           typst
         ];
         buildInputs = runtimeLibs;
-        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
+        # Bake the dlopened libraries into RUNPATH, so builds run outside this shell.
+        RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath runtimeLibs}";
       };
     };
 }
