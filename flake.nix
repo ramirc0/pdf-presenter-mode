@@ -21,8 +21,32 @@
         libxkbcommon
         wayland
       ];
+      cargoToml = pkgs.lib.importTOML ./Cargo.toml;
     in
     {
+      # GL needs the host's driver: wrap with nixGL outside NixOS.
+      packages.${system}.default = pkgs.rustPlatform.buildRustPackage {
+        pname = cargoToml.package.name;
+        inherit (cargoToml.package) version;
+        src = pkgs.lib.cleanSource ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+        # The binary embeds ProggyForever, whose MIT license must travel with it.
+        postInstall = ''
+          install -Dm644 LICENSE assets/fonts/ProggyForever-LICENSE.txt \
+            -t $out/share/licenses/${cargoToml.package.name}
+        '';
+        # Fixup shrinks RUNPATH to linked libraries, so add the dlopened ones after it.
+        postFixup = ''
+          patchelf --add-rpath ${pkgs.lib.makeLibraryPath runtimeLibs} $out/bin/ppm
+        '';
+        meta = {
+          inherit (cargoToml.package) description;
+          license = pkgs.lib.licenses.mit;
+          mainProgram = "ppm";
+          platforms = [ system ];
+        };
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           cargo
