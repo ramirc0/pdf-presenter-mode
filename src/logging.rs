@@ -26,7 +26,9 @@ impl StderrLog {
 
 impl log::Log for StderrLog {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Warn
+        // egui_commonmark installs image loaders even with its image features off,
+        // so egui_extras would warn on every launch that it has none.
+        metadata.level() <= log::Level::Warn && metadata.target() != "egui_extras::loaders"
     }
 
     fn log(&self, record: &log::Record) {
@@ -72,5 +74,15 @@ mod tests {
         let log = StderrLog::new();
         assert!(!log.enabled(&log::Metadata::builder().level(log::Level::Info).build()));
         assert!(log.enabled(&log::Metadata::builder().level(log::Level::Warn).build()));
+    }
+
+    #[test]
+    fn the_image_loader_warning_is_dropped() {
+        let log = StderrLog::new();
+        let metadata = log::Metadata::builder()
+            .level(log::Level::Warn)
+            .target("egui_extras::loaders")
+            .build();
+        assert!(!log.enabled(&metadata));
     }
 }

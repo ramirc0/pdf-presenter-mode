@@ -15,6 +15,7 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 hayro = "0.9"
 log = "0.4.35"
 serde = { version = "1.0.229", features = ["derive"] }

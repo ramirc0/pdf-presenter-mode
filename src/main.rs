@@ -82,6 +82,8 @@ fn main() -> anyhow::Result<()> {
             move |cc| {
                 let ctx = cc.egui_ctx.clone();
                 fonts::install(&ctx);
+                // Both windows paint black, so text must be light whatever the system theme.
+                ctx.set_theme(egui::Theme::Dark);
                 gui.get_or_init(|| ctx.clone());
                 let repaint: Repaint = Arc::new(move || {
                     ctx.request_repaint_of(egui::ViewportId::ROOT);

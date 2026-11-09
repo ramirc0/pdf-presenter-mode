@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use eframe::egui;
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::deck::PageSize;
 use crate::keys;
@@ -37,6 +38,9 @@ pub struct Area {
     pub pixels_per_point: f32,
 }
 
+/// How much larger notes are than egui's default text.
+const NOTES_SCALE: f32 = 1.75;
+
 /// Repaints every window. The render worker and key handling share it.
 pub type Repaint = Arc<dyn Fn() + Send + Sync>;
 
@@ -44,6 +48,7 @@ pub type Repaint = Arc<dyn Fn() + Send + Sync>;
 pub struct Stage {
     pages: Vec<PageSize>,
     notes: Notes,
+    markdown: CommonMarkCache,
     talk: Talk,
     renderer: Renderer,
     areas: [Option<Area>; 2],
@@ -58,6 +63,7 @@ impl Stage {
         Self {
             pages,
             notes,
+            markdown: CommonMarkCache::default(),
             talk,
             renderer,
             areas: [None, None],
@@ -109,12 +115,18 @@ impl Stage {
             && let Some(note) = self.notes.on_page(self.talk.slide())
         {
             let mut notes_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(16.0)));
+            let style = notes_ui.style_mut();
+            for font in style.text_styles.values_mut() {
+                font.size *= NOTES_SCALE;
+            }
+            // Brighter than egui's dark gray, while bold stays white.
+            style.visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(210);
             egui::ScrollArea::vertical().show(&mut notes_ui, |ui| {
-                ui.label(
-                    egui::RichText::new(note)
-                        .size(22.0)
-                        .color(egui::Color32::WHITE),
-                );
+                if self.notes.plain_text {
+                    ui.label(note);
+                } else {
+                    CommonMarkViewer::new().show(ui, &mut self.markdown, note);
+                }
             });
         }
         let painter = ui.painter();
