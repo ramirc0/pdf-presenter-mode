@@ -105,7 +105,7 @@ impl Stage {
         match view_of(window, self.talk.swapped()) {
             View::Audience => {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-                self.show_slide(ui, window, Some(self.talk.slide()), ui.max_rect());
+                self.show_slide(ui, window, self.talk.audience_slide(), ui.max_rect());
             }
             View::Presenter => self.draw_presenter(ui, window),
         }
@@ -187,6 +187,20 @@ impl Stage {
                 self.talk.slide() + 1,
                 self.talk.slides()
             ));
+            let badge = |ui: &mut egui::Ui, text: &str| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .strong()
+                        .color(egui::Color32::BLACK)
+                        .background_color(ui.visuals().warn_fg_color),
+                );
+            };
+            if self.talk.blanked() {
+                badge(ui, " BLANK ");
+            }
+            if self.talk.frozen() {
+                badge(ui, " FROZEN ");
+            }
             if self.talk.quit_armed() {
                 ui.colored_label(ui.visuals().warn_fg_color, "Press q again to quit");
             }

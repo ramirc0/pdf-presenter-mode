@@ -15,6 +15,10 @@ pub enum Action {
     Last,
     /// Swap what the two windows show.
     Swap,
+    /// Turn the audience view black, or back.
+    Blank,
+    /// Keep the audience on the current slide while the presenter moves on, or let it follow again.
+    Freeze,
     /// Switch between the two presenter layouts.
     Layout,
     /// Make the notes larger.
@@ -46,6 +50,9 @@ pub struct Talk {
     slide: usize,
     slides: usize,
     swapped: bool,
+    blanked: bool,
+    /// The slide the audience stays on, while frozen.
+    frozen: Option<usize>,
     settings: Settings,
     help: bool,
     quit_armed: bool,
@@ -58,6 +65,8 @@ impl Talk {
             slide: 0,
             slides,
             swapped: false,
+            blanked: false,
+            frozen: None,
             settings,
             help: false,
             quit_armed: false,
@@ -77,6 +86,24 @@ impl Talk {
     /// The slide after the current one, if any.
     pub fn next_slide(&self) -> Option<usize> {
         (self.slide + 1 < self.slides).then_some(self.slide + 1)
+    }
+
+    /// The slide the audience sees, or `None` while blanked or for an empty deck.
+    pub fn audience_slide(&self) -> Option<usize> {
+        if self.blanked || self.slides == 0 {
+            return None;
+        }
+        Some(self.frozen.unwrap_or(self.slide))
+    }
+
+    /// Whether the audience view is black.
+    pub fn blanked(&self) -> bool {
+        self.blanked
+    }
+
+    /// Whether the audience stays on one slide while the presenter moves.
+    pub fn frozen(&self) -> bool {
+        self.frozen.is_some()
     }
 
     /// Whether the presenter window shows the audience view and the other way around.
@@ -121,6 +148,13 @@ impl Talk {
             Action::First => self.slide = 0,
             Action::Last => self.slide = last,
             Action::Swap => self.swapped = !self.swapped,
+            Action::Blank => self.blanked = !self.blanked,
+            Action::Freeze => {
+                self.frozen = match self.frozen {
+                    Some(_) => None,
+                    None => Some(self.slide),
+                }
+            }
             Action::Layout => self.settings.layout = self.settings.layout.other(),
             Action::BiggerNotes => self.settings.bigger_notes(),
             Action::SmallerNotes => self.settings.smaller_notes(),
@@ -172,6 +206,34 @@ mod tests {
         assert_eq!(talk.slide(), 1);
         talk.apply(Action::Swap);
         assert!(!talk.swapped());
+    }
+
+    #[test]
+    fn blank_hides_the_slide_from_the_audience() {
+        let mut talk = Talk::new(3, Settings::default());
+        assert_eq!(talk.audience_slide(), Some(0));
+        talk.apply(Action::Blank);
+        assert_eq!(talk.audience_slide(), None);
+        talk.apply(Action::Next);
+        talk.apply(Action::Blank);
+        assert_eq!(talk.audience_slide(), Some(1));
+    }
+
+    #[test]
+    fn freeze_holds_the_audience_until_released() {
+        let mut talk = Talk::new(3, Settings::default());
+        talk.apply(Action::Freeze);
+        talk.apply(Action::Next);
+        talk.apply(Action::Next);
+        assert_eq!(talk.slide(), 2);
+        assert_eq!(talk.audience_slide(), Some(0));
+        talk.apply(Action::Freeze);
+        assert_eq!(talk.audience_slide(), Some(2));
+    }
+
+    #[test]
+    fn an_empty_deck_shows_the_audience_nothing() {
+        assert_eq!(Talk::new(0, Settings::default()).audience_slide(), None);
     }
 
     #[test]

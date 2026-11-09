@@ -50,6 +50,12 @@ pub const BINDINGS: &[Binding] = &[
         does: "last slide",
     },
     Binding {
+        keys: &[Key::B, Key::Period],
+        alt: false,
+        action: Action::Blank,
+        does: "blank the audience, or show it again",
+    },
+    Binding {
         keys: &[Key::F],
         alt: false,
         action: Action::Fullscreen,
@@ -72,6 +78,12 @@ pub const BINDINGS: &[Binding] = &[
         alt: false,
         action: Action::Quit,
         does: "quit, when pressed twice",
+    },
+    Binding {
+        keys: &[Key::F],
+        alt: true,
+        action: Action::Freeze,
+        does: "freeze the audience, or let it follow again",
     },
     Binding {
         keys: &[Key::V],
