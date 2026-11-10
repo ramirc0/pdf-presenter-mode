@@ -239,6 +239,10 @@ impl eframe::App for Console {
                     .winit_window()
                     .and_then(|window| window.current_monitor())
                     .and_then(|monitor| monitor.name());
+                // Wayland names the window's monitor after it first shows, and no event repaints then.
+                if here.is_none() {
+                    ui.ctx().request_repaint_after(Duration::from_millis(100));
+                }
                 if let Some((launch, deck)) = setup.show(ui, &list, here.as_deref(), &self.recent) {
                     self.start(launch, deck, ui.ctx(), frame.storage());
                     ui.ctx().request_repaint();
