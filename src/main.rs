@@ -1,6 +1,7 @@
 //! `ppm`: a presenter console for PDF slide decks.
 
 mod deck;
+mod desktop;
 mod fonts;
 mod keys;
 mod launch;
@@ -63,6 +64,10 @@ struct Cli {
     /// Show the audience view as a normal window, for rehearsal and screen sharing.
     #[arg(long, conflicts_with = "audience", requires = "deck")]
     windowed_audience: bool,
+    /// List ppm in app launchers and "Open with" menus, by writing a desktop entry that starts
+    /// this program to ~/.local/share/applications. For installs without a package manager.
+    #[arg(long, exclusive = true)]
+    install_desktop_entry: bool,
 }
 
 /// How often to look for a new or missing monitor.
@@ -74,6 +79,11 @@ fn main() -> anyhow::Result<()> {
     log::set_logger(&LOG)?;
     log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
+    if cli.install_desktop_entry {
+        let path = desktop::install()?;
+        println!("Wrote {}", path.display());
+        return Ok(());
+    }
     if cli.presenter.is_some() && cli.presenter == cli.audience {
         anyhow::bail!("--audience and --presenter name the same monitor");
     }
