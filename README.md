@@ -8,6 +8,7 @@ A light presenter console for PDF slide decks, with speaker notes and a talk tim
 
 `ppm` shows a PDF fullscreen on the projector and a presenter view on the laptop.
 The presenter view holds the current slide, the next slide, Markdown speaker notes and a status bar with the clock and timers.
+A laser pointer marks a spot on the projected slide with the mouse.
 It was built for decks made with [typslides](https://typst.app/universe/package/typslides), but it presents any PDF, one page per slide.
 
 Speaker notes use the [pdfpc](https://pdfpc.github.io) format 2 JSON.
@@ -95,6 +96,11 @@ Tab opens the overview, and `?` shows every shortcut:
 ![The overview: every slide in a grid, with the selected one outlined](docs/overview.png)
 
 ![The shortcut hint over the presenter view](docs/shortcuts.png)
+
+With the laser on, the status bar shows LASER.
+Point at the presenter's current slide, and a red dot appears at the same spot on both views.
+The audience shows the dot only while it shows that slide, so a blanked or frozen audience stays clean.
+The laser starts off at each launch.
 
 Drag the lines between the presenter panels to resize them.
 The layout, the panel sizes and the notes size are saved in `~/.local/share/ppm`.
