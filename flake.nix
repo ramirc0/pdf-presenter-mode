@@ -32,9 +32,13 @@
         src = pkgs.lib.cleanSource ./.;
         cargoLock.lockFile = ./Cargo.lock;
         # The binary embeds ProggyForever, whose MIT license must travel with it.
+        # An absolute Exec lets home-manager's nixGL wrap point the entry at its wrapper.
         postInstall = ''
           install -Dm644 LICENSE assets/fonts/ProggyForever-LICENSE.txt \
             -t $out/share/licenses/${cargoToml.package.name}
+          install -Dm644 assets/ppm.desktop -t $out/share/applications
+          substituteInPlace $out/share/applications/ppm.desktop \
+            --replace-fail "Exec=ppm" "Exec=$out/bin/ppm"
         '';
         # Fixup shrinks RUNPATH to linked libraries, so add the dlopened ones after it.
         postFixup = ''

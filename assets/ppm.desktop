@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ppm
+GenericName=PDF Presenter
+Comment=Present a PDF slide deck with speaker notes
+Exec=ppm %f
+Terminal=false
+MimeType=application/pdf;
+Categories=Office;Presentation;
+Keywords=slides;presentation;pdfpc;
+StartupWMClass=ppm
