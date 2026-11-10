@@ -21,19 +21,29 @@ It targets Linux on Wayland and is developed on Hyprland.
 
 ### Dependencies
 
-* Linux with a Wayland compositor.
-* Nix with flakes, to build and install.
-* On a host other than NixOS, [nixGL](https://github.com/nix-community/nixGL) for the GL driver.
+* Linux with a Wayland compositor and a GL driver.
+* For the Cargo route: Rust 1.95 or newer, plus the system's Wayland, xkbcommon and EGL libraries.
+  On Arch: `pacman -S rust wayland libxkbcommon libglvnd mesa`.
+* For the Nix route: Nix with flakes. Outside NixOS, also [nixGL](https://github.com/nix-community/nixGL) for the GL driver.
 
 ### Installing
 
-Install the flake's package into your profile:
+With Cargo and the system's libraries:
+
+```
+cargo install --locked --git https://github.com/ramirc0/pdf-presenter-mode
+```
+
+Use the system's `cargo` and `cc`. If a Nix profile puts its own first on `PATH`, the binary links Nix's glibc
+and cannot load the system's Wayland library. Run `PATH=/usr/bin:$PATH cargo install ...` instead.
+
+With Nix, install the flake's package into your profile:
 
 ```
 nix profile install github:ramirc0/pdf-presenter-mode
 ```
 
-Outside NixOS, wrap `ppm` with nixGL, for example `nixGLIntel ppm deck.pdf`.
+Outside NixOS, wrap the Nix build with nixGL, for example `nixGLIntel ppm deck.pdf`.
 
 To build from source, enter the dev shell with `nix develop` or let direnv load it, then run `just` to list the tasks.
 
@@ -90,7 +100,8 @@ The layout, the panel sizes and the notes size are saved in `~/.local/share/ppm`
 
 ### Speaker notes in typslides
 
-Add this after the deck's preamble:
+[typslides](https://github.com/manjavacas/typslides) has no notes feature, so the deck carries a short snippet.
+Add it after the deck's preamble:
 
 ```typst
 #let note(body) = {
@@ -137,8 +148,9 @@ Then write notes inside slide bodies:
 ppm --help
 ```
 
-* "The wayland library could not be loaded" means the binary was built outside the dev shell. Build inside it, or install the flake package.
-* "Found no glutin configs" means GL found no driver. Run `ppm` through nixGL.
+* "The wayland library could not be loaded" means a binary linked against Nix's glibc found no Nix Wayland library.
+  Build with the system's toolchain, inside the dev shell, or install the flake package.
+* "Found no glutin configs" means GL found no driver. Run a Nix build through nixGL.
 * No notes show: check that the attachment's name ends in `.pdfpc`, for example with `pdfdetach -list deck.pdf`.
   A notes file that fails to parse prints a warning and the talk opens without notes.
 * A PDF caught half-written during a reload keeps the old deck on screen. `ppm` retries every second.
