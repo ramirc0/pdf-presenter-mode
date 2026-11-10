@@ -30,11 +30,18 @@ windows() {
       end'
 }
 
-# Waits up to 5 s for the windows to match, then reports.
+# Prints where the presenter window is, such as "HEADLESS-1 fullscreen".
+presenter() {
+  swaymsg -t get_tree -r | jq -r '[.. | objects | select(.type == "output") as $o | $o | ..
+      | objects | select(.app_id? == "ppm" and .name == "ppm")
+      | "\($o.name)\(if .fullscreen_mode == 1 then " fullscreen" else "" end)"] | join(", ")'
+}
+
+# Waits up to 5 s for PROBE, by default the audience's place, to print WANT, then reports.
 expect() {
-  local name=$1 want=$2 got=""
+  local name=$1 want=$2 probe=${3:-windows} got=""
   for _ in $(seq 50); do
-    got=$(windows)
+    got=$($probe)
     [ "$got" = "$want" ] && { echo "ok: $name"; return; }
     sleep 0.1
   done
@@ -64,6 +71,15 @@ nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-2 >> "$work/ppm
 expect "the audience covers the presenter's output" "HEADLESS-2 fullscreen"
 swaymsg output HEADLESS-2 unplug >/dev/null
 expect "unplug closes an audience that covers the presenter" "none"
+pkill -x -P "$$" ppm; sleep 0.5
+
+# The presenter opens on the focused new output, then moves to the one it asks for.
+swaymsg create_output >/dev/null
+second=$(swaymsg -t get_outputs -r | jq -r '.[-1].name')
+swaymsg focus output "$second" >/dev/null
+nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --presenter HEADLESS-1 >> "$work/ppm.log" 2>&1 &
+expect "--presenter puts the presenter fullscreen there" "HEADLESS-1 fullscreen" presenter
+expect "the audience skips the presenter's monitor" "$second fullscreen"
 
 if [ "$failures" -gt 0 ]; then
   echo "ppm log:"; cat "$work/ppm.log"

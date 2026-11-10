@@ -51,6 +51,9 @@ struct Cli {
     /// Count down to this local time, such as 14:30, instead of the notes file's end time.
     #[arg(long, value_name = "HH:MM")]
     end_time: Option<jiff::civil::Time>,
+    /// Put the presenter view fullscreen on this connector, such as eDP-1, instead of a normal window.
+    #[arg(long, value_name = "CONNECTOR")]
+    presenter: Option<String>,
     /// Show the audience view as a normal window, for rehearsal and screen sharing.
     #[arg(long, conflicts_with = "audience")]
     windowed_audience: bool,
@@ -68,6 +71,9 @@ fn main() -> anyhow::Result<()> {
     log::set_logger(&LOG)?;
     log::set_max_level(log::LevelFilter::Warn);
     let cli = Cli::parse();
+    if cli.presenter.is_some() && cli.presenter == cli.audience {
+        anyhow::bail!("--audience and --presenter name the same monitor");
+    }
     let goal = cli.end_time.map(Goal::EndsAt).or(cli
         .duration
         .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))));
@@ -136,6 +142,7 @@ fn main() -> anyhow::Result<()> {
                     Arc::new(Mutex::new(stage)),
                     monitors,
                     projector,
+                    cli.presenter,
                 )))
             }
         }),
