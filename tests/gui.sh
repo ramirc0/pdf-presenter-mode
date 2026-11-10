@@ -16,24 +16,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-
-start_sway() {
-  local before sock
-  before=$(ls "$XDG_RUNTIME_DIR"/wayland-? 2>/dev/null || true)
-  printf 'output HEADLESS-1 mode 1920x1200\noutput HEADLESS-2 mode 1920x1080\n' > "$work/sway.conf"
-  env -u WAYLAND_DISPLAY -u DISPLAY -u SWAYSOCK WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 \
-    WLR_LIBINPUT_NO_DEVICES=1 nixGLIntel sway -c "$work/sway.conf" > "$work/sway.log" 2>&1 &
-  local pid=$!
-  for _ in $(seq 100); do
-    sock=$(comm -13 <(echo "$before") <(ls "$XDG_RUNTIME_DIR"/wayland-? 2>/dev/null) | head -1)
-    if [ -n "$sock" ] && [ -S "$XDG_RUNTIME_DIR/sway-ipc.$UID.$pid.sock" ]; then
-      export WAYLAND_DISPLAY=${sock##*/} SWAYSOCK=$XDG_RUNTIME_DIR/sway-ipc.$UID.$pid.sock
-      return
-    fi
-    sleep 0.1
-  done
-  echo "sway did not start:"; cat "$work/sway.log"; exit 1
-}
+# shellcheck source=tests/sway.sh
+source "$root/tests/sway.sh"
 
 # Prints where the audience window is, such as "HEADLESS-3 fullscreen", or "none".
 # Prints "no presenter" instead when the presenter window is missing.
@@ -58,7 +42,7 @@ expect() {
   failures=$((failures + 1))
 }
 
-start_sway
+start_sway 2 $'output HEADLESS-1 mode 1920x1200\noutput HEADLESS-2 mode 1920x1080'
 cargo run --quiet --manifest-path "$root/Cargo.toml" -- "$root/fixtures/basic.pdf" --audience HEADLESS-3 \
   > "$work/ppm.log" 2>&1 &
 expect "cargo run opens the presenter" "none"
