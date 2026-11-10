@@ -28,7 +28,7 @@ It targets Linux on Wayland and is developed on Hyprland.
 Install the flake's package into your profile:
 
 ```
-nix profile install .
+nix profile install github:ramirc0/pdf-presenter-mode
 ```
 
 Outside NixOS, wrap `ppm` with nixGL, for example `nixGLIntel ppm deck.pdf`.
