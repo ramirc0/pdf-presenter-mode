@@ -1,6 +1,7 @@
 //! The start page: pick a deck, place the two windows, set the countdown, and start.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use eframe::egui;
@@ -43,6 +44,8 @@ pub struct Setup {
     ends_at: String,
     /// Whether the path field has had its first focus.
     focused: bool,
+    /// The file chooser's answer, while it is open.
+    chooser: Option<Receiver<Option<PathBuf>>>,
 }
 
 impl Setup {
@@ -104,24 +107,74 @@ impl Setup {
         if start { self.launch(here) } else { None }
     }
 
-    /// The path field. Leaving it opens the deck. Returns whether Enter left it.
+    /// The path field and the button for the file chooser. Leaving the field opens the deck.
+    /// Returns whether Enter left it.
     fn show_path(&mut self, ui: &mut egui::Ui) -> bool {
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut self.path)
-                .hint_text("the PDF to present, such as ~/talks/talk.pdf")
-                .desired_width(WIDTH),
-        );
-        if !self.focused {
-            field.request_focus();
-            self.focused = true;
+        self.take_choice();
+        ui.horizontal(|ui| {
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.path)
+                    .hint_text("the PDF to present, such as ~/talks/talk.pdf")
+                    .desired_width(WIDTH - 100.0),
+            );
+            if !self.focused {
+                field.request_focus();
+                self.focused = true;
+            }
+            if field.changed() {
+                self.opened = None;
+            }
+            if field.lost_focus() && self.opened.is_none() && !self.path.trim().is_empty() {
+                self.open();
+            }
+            let open = egui::Button::new("Open…").min_size(egui::vec2(88.0, 0.0));
+            if ui.add_enabled(self.chooser.is_none(), open).clicked() {
+                self.choose(ui.ctx());
+            }
+            field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
+        })
+        .inner
+    }
+
+    /// Opens the desktop's file chooser on its own thread, so the page keeps drawing.
+    fn choose(&mut self, ctx: &egui::Context) {
+        let (answer, chooser) = mpsc::channel();
+        let folder = expand_home(self.path.trim())
+            .parent()
+            .filter(|folder| folder.is_dir())
+            .map(Path::to_path_buf);
+        let ctx = ctx.clone();
+        std::thread::Builder::new()
+            .name("chooser".into())
+            .spawn(move || {
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title("Open a deck")
+                    .add_filter("PDF", &["pdf"]);
+                if let Some(folder) = folder {
+                    dialog = dialog.set_directory(folder);
+                }
+                // The talk may have started meanwhile and dropped the receiver.
+                let _ = answer.send(dialog.pick_file());
+                ctx.request_repaint();
+            })
+            .expect("cannot start the file chooser thread");
+        self.chooser = Some(chooser);
+    }
+
+    /// Opens the deck the file chooser picked, once it answers.
+    fn take_choice(&mut self) {
+        let Some(chooser) = &self.chooser else {
+            return;
+        };
+        match chooser.try_recv() {
+            Ok(Some(path)) => {
+                self.path = path.display().to_string();
+                self.open();
+                self.chooser = None;
+            }
+            Ok(None) | Err(TryRecvError::Disconnected) => self.chooser = None,
+            Err(TryRecvError::Empty) => {}
         }
-        if field.changed() {
-            self.opened = None;
-        }
-        if field.lost_focus() && self.opened.is_none() && !self.path.trim().is_empty() {
-            self.open();
-        }
-        field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
     }
 
     /// Opens the deck at the typed path, and fills the timer from its notes.

@@ -15,8 +15,9 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       nixGLIntel = nixgl.packages.${system}.nixGLIntel;
-      # winit and glutin dlopen these at run time.
+      # winit and glutin dlopen these at run time, and rfd dlopens libdbus for the file chooser.
       runtimeLibs = with pkgs; [
+        dbus
         libGL
         libxkbcommon
         wayland
