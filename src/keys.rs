@@ -168,6 +168,12 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::Swap,
         does: "swap the two windows' views",
     },
+    Binding {
+        keys: &[Key::M],
+        alt: true,
+        action: Action::MoveAudience,
+        does: "move the audience to the next monitor",
+    },
 ];
 
 /// The digit keys, in order from 0. They type a slide number after `g`.
@@ -269,6 +275,12 @@ mod tests {
     fn the_laser_needs_alt() {
         assert_eq!(action_for(Key::L, ALT), Some(Action::Laser));
         assert_eq!(action_for(Key::L, NONE), Some(Action::Next));
+    }
+
+    #[test]
+    fn moving_the_audience_needs_alt() {
+        assert_eq!(action_for(Key::M, ALT), Some(Action::MoveAudience));
+        assert_eq!(action_for(Key::M, NONE), None);
     }
 
     #[test]

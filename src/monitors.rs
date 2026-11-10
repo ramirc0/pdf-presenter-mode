@@ -55,9 +55,52 @@ pub fn audience_monitor(
     }
 }
 
+/// Picks the monitor after `current` among `names` for the audience, wrapping around and
+/// skipping `presenter`, the presenter's monitor. Returns `None` if no other monitor can take it.
+pub fn next_audience_monitor(
+    names: &[String],
+    current: Option<&str>,
+    presenter: Option<&str>,
+) -> Option<usize> {
+    let now = current.and_then(|current| names.iter().position(|name| name == current));
+    let first = now.map_or(0, |now| now + 1);
+    (0..names.len())
+        .map(|step| (first + step) % names.len())
+        .find(|&index| {
+            Some(index) != now
+                && !names[index].is_empty()
+                && Some(names[index].as_str()) != presenter
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_audience_moves_on_past_the_presenter_and_around() {
+        let list = names(&["eDP-1", "DP-1", "DP-2"]);
+        let next = |current| next_audience_monitor(&list, current, Some("eDP-1"));
+        assert_eq!(next(Some("DP-1")), Some(2));
+        assert_eq!(next(Some("DP-2")), Some(1));
+        assert_eq!(next(None), Some(1));
+    }
+
+    #[test]
+    fn with_no_other_monitor_the_audience_stays() {
+        let list = names(&["eDP-1", "DP-1"]);
+        assert_eq!(
+            next_audience_monitor(&list, Some("DP-1"), Some("eDP-1")),
+            None
+        );
+        assert_eq!(next_audience_monitor(&[], None, None), None);
+    }
+
+    #[test]
+    fn a_monitor_without_a_name_yet_is_skipped() {
+        let list = names(&["eDP-1", "", "DP-2"]);
+        assert_eq!(next_audience_monitor(&list, None, Some("eDP-1")), Some(2));
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(ToString::to_string).collect()

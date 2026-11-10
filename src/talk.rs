@@ -34,6 +34,8 @@ pub enum Action {
     Confirm,
     /// Swap what the two windows show.
     Swap,
+    /// Move the audience window to the next monitor.
+    MoveAudience,
     /// Turn the audience view black, or back.
     Blank,
     /// Keep the audience on the current slide while the presenter moves on, or let it follow again.
@@ -71,6 +73,8 @@ pub enum Outcome {
     Continue,
     /// Close the app.
     Quit,
+    /// Move the audience window to the next monitor.
+    MoveAudience,
 }
 
 /// Position in the deck, the window roles, what is open, and the pending quit request.
@@ -328,6 +332,8 @@ impl Talk {
             Action::Fullscreen => {}
             // The stage keeps the ink.
             Action::Erase => {}
+            // The windows place themselves.
+            Action::MoveAudience => return Outcome::MoveAudience,
             Action::Quit => unreachable!("handled above"),
         }
         Outcome::Continue
@@ -337,6 +343,16 @@ impl Talk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moving_the_audience_is_left_to_the_windows() {
+        let mut talk = Talk::new(3, Settings::default());
+        assert_eq!(
+            talk.apply(Action::MoveAudience, Instant::now()),
+            Outcome::MoveAudience
+        );
+        assert_eq!(talk.slide(), 0);
+    }
 
     #[test]
     fn navigation_stays_inside_the_deck() {

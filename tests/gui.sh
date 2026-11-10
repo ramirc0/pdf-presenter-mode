@@ -91,6 +91,18 @@ wtype -s 300 "$root/fixtures/basic.pdf"
 wtype -s 100 -P Return -s 50 -p Return
 expect "Enter starts the talk with the presenter where the page was" "HEADLESS-1 fullscreen" presenter
 expect "Enter starts the talk with the audience outside" "$second fullscreen"
+pkill -x -P "$$" ppm; sleep 0.5
+
+# Alt+m moves the audience along the monitors, past the presenter's.
+swaymsg create_output >/dev/null
+third=$(swaymsg -t get_outputs -r | jq -r '.[-1].name')
+swaymsg focus output HEADLESS-1 >/dev/null
+nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience "$second" >> "$work/ppm.log" 2>&1 &
+expect "the audience starts where it asks" "$second fullscreen"
+wtype -s 300 -M alt -P m -s 50 -p m -m alt
+expect "Alt+m moves the audience to the next monitor" "$third fullscreen"
+wtype -s 300 -M alt -P m -s 50 -p m -m alt
+expect "Alt+m skips the presenter's monitor" "$second fullscreen"
 
 if [ "$failures" -gt 0 ]; then
   echo "ppm log:"; cat "$work/ppm.log"

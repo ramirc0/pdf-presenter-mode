@@ -104,6 +104,7 @@ impl Stage {
             return Outcome::Continue;
         }
         (self.repaint)();
+        let mut outcome = Outcome::Continue;
         for action in actions {
             if action == Action::Fullscreen {
                 let fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
@@ -114,11 +115,13 @@ impl Stage {
                 let slide = self.talk.slide();
                 self.ink.retain(|stroke| stroke.slide != slide);
             }
-            if self.talk.apply(action, Instant::now()) == Outcome::Quit {
-                return Outcome::Quit;
+            match self.talk.apply(action, Instant::now()) {
+                Outcome::Quit => return Outcome::Quit,
+                Outcome::MoveAudience => outcome = Outcome::MoveAudience,
+                Outcome::Continue => {}
             }
         }
-        Outcome::Continue
+        outcome
     }
 
     /// Stops rendering for `window`, which has closed.
@@ -128,7 +131,8 @@ impl Stage {
     }
 
     /// Draws `window`'s view into `ui`.
-    pub fn draw(&mut self, ui: &mut egui::Ui, window: Window) {
+    /// The presenter view's status bar names `audience`, the monitor the audience is on.
+    pub fn draw(&mut self, ui: &mut egui::Ui, window: Window, audience: Option<&str>) {
         if let Some(deck) = self.reloads.try_iter().last() {
             self.talk.reload(deck.pages.len());
             self.pages = deck.pages;
@@ -151,7 +155,7 @@ impl Stage {
                     self.show_laser(ui, shown);
                 }
             }
-            View::Presenter => self.draw_presenter(ui, window),
+            View::Presenter => self.draw_presenter(ui, window, audience),
         }
         let wanted = plan(
             self.pages.len(),
@@ -161,10 +165,10 @@ impl Stage {
         self.renderer.request(wanted);
     }
 
-    fn draw_presenter(&mut self, ui: &mut egui::Ui, window: Window) {
+    fn draw_presenter(&mut self, ui: &mut egui::Ui, window: Window, audience: Option<&str>) {
         egui::Panel::bottom("status")
             .frame(egui::Frame::NONE.inner_margin(8))
-            .show(ui, |ui| self.show_status(ui));
+            .show(ui, |ui| self.show_status(ui, audience));
         let body = ui.available_rect_before_wrap();
         if let Some(selected) = self.talk.overview() {
             self.show_overview(ui, window, body, selected);
@@ -356,7 +360,7 @@ impl Stage {
         });
     }
 
-    fn show_status(&self, ui: &mut egui::Ui) {
+    fn show_status(&self, ui: &mut egui::Ui, audience: Option<&str>) {
         enlarge_text(ui.style_mut(), 1.4);
         let wall = jiff::Zoned::now();
         // The clock and timers tick once per second, in this window only.
@@ -392,6 +396,9 @@ impl Stage {
                 self.talk.slide() + 1,
                 self.talk.slides()
             ));
+            if let Some(monitor) = audience {
+                ui.label(format!("audience {monitor}"));
+            }
             if let Some(typed) = self.talk.goto() {
                 let typed = if typed == 0 {
                     String::new()
@@ -595,7 +602,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             stage.handle_keys(ui);
-            stage.draw(ui, window);
+            stage.draw(ui, window, None);
         });
         output.textures_delta.clear();
         output
