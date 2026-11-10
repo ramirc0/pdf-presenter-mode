@@ -10,6 +10,7 @@ use crate::deck::Deck;
 use crate::launch::Launch;
 use crate::monitors::{Monitor, audience_monitor, names_of};
 use crate::presenter::Projector;
+use crate::settings::Recent;
 use crate::stage::enlarge_text;
 use crate::timer::Goal;
 
@@ -49,13 +50,15 @@ pub struct Setup {
 }
 
 impl Setup {
-    /// Draws the page into `ui`, with `monitors` connected and the window on the monitor
-    /// named `here`. Returns the talk and its opened deck once the speaker starts it.
+    /// Draws the page into `ui`, with `monitors` connected, the window on the monitor
+    /// named `here`, and the `recent` decks to offer. Returns the talk and its opened deck
+    /// once the speaker starts it.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         monitors: &[Monitor],
         here: Option<&str>,
+        recent: &Recent,
     ) -> Option<(Launch, Deck)> {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
@@ -75,6 +78,11 @@ impl Setup {
                         self.show_check(ui);
                     });
                     ui.end_row();
+                    if !recent.decks().is_empty() {
+                        ui.label("Recent");
+                        self.show_recent(ui, recent);
+                        ui.end_row();
+                    }
                     ui.label("Screens");
                     ui.vertical(|ui| {
                         ui.weak("Click a screen to put the audience there.");
@@ -175,6 +183,25 @@ impl Setup {
             Ok(None) | Err(TryRecvError::Disconnected) => self.chooser = None,
             Err(TryRecvError::Empty) => {}
         }
+    }
+
+    /// The recent decks by name and folder. A click opens one.
+    fn show_recent(&mut self, ui: &mut egui::Ui, recent: &Recent) {
+        egui::Grid::new("recent")
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                for deck in recent.decks() {
+                    let name = deck.file_name().unwrap_or_default().to_string_lossy();
+                    if ui.link(name).clicked() {
+                        self.path = deck.display().to_string();
+                        self.open();
+                    }
+                    let folder = deck.parent().unwrap_or(deck);
+                    ui.weak(tilde_home(folder));
+                    ui.end_row();
+                }
+            });
     }
 
     /// Opens the deck at the typed path, and fills the timer from its notes.
@@ -460,6 +487,15 @@ fn spots(names: &[String], except: Option<&str>) -> Vec<Spot> {
         .collect()
 }
 
+/// `path` with the home directory written as `~`.
+fn tilde_home(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) => Path::new("~").join(rest).display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
 /// `path` with a leading `~/` replaced by the home directory.
 fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
@@ -504,7 +540,9 @@ mod tests {
             ..Default::default()
         };
         let mut started = None;
-        let mut output = ctx.run_ui(input, |ui| started = setup.show(ui, &desk(), Some("eDP-1")));
+        let mut output = ctx.run_ui(input, |ui| {
+            started = setup.show(ui, &desk(), Some("eDP-1"), &Recent::default());
+        });
         output.textures_delta.clear();
         let shapes = output
             .shapes

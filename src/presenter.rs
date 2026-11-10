@@ -8,7 +8,7 @@ use eframe::egui;
 use crate::deck::Deck;
 use crate::launch::Launch;
 use crate::monitors::{Monitors, audience_monitor, names_of};
-use crate::settings::Settings;
+use crate::settings::{Recent, Settings};
 use crate::setup::Setup;
 use crate::stage::{Repaint, Stage, Window};
 use crate::talk::Outcome;
@@ -69,6 +69,8 @@ pub struct Console {
     presenter_on: Option<String>,
     /// The monitor list last checked for missing requested monitors.
     checked: Vec<String>,
+    /// The decks presented last, which the start page offers.
+    recent: Recent,
 }
 
 /// What the root window shows.
@@ -80,8 +82,8 @@ enum Phase {
 }
 
 impl Console {
-    /// The start page, for a talk on `monitors`.
-    pub fn new(monitors: Monitors) -> Self {
+    /// The start page, for a talk on `monitors` that offers the `recent` decks.
+    pub fn new(monitors: Monitors, recent: Recent) -> Self {
         Self {
             phase: Phase::Setup(Box::default()),
             monitors,
@@ -90,6 +92,7 @@ impl Console {
             presenter: None,
             presenter_on: None,
             checked: Vec::new(),
+            recent,
         }
     }
 
@@ -122,6 +125,7 @@ impl Console {
             },
         );
         let stage = Stage::new(deck, Settings::load(storage), reloads, ctx.clone(), repaint);
+        self.recent.add(&launch.deck);
         self.projector = launch.audience;
         self.presenter = launch.presenter;
         self.phase = Phase::Talk(Arc::new(Mutex::new(stage)));
@@ -235,7 +239,7 @@ impl eframe::App for Console {
                     .winit_window()
                     .and_then(|window| window.current_monitor())
                     .and_then(|monitor| monitor.name());
-                if let Some((launch, deck)) = setup.show(ui, &list, here.as_deref()) {
+                if let Some((launch, deck)) = setup.show(ui, &list, here.as_deref(), &self.recent) {
                     self.start(launch, deck, ui.ctx(), frame.storage());
                     ui.ctx().request_repaint();
                 }
@@ -257,6 +261,7 @@ impl eframe::App for Console {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.recent.save(storage);
         if let Phase::Talk(stage) = &self.phase {
             stage
                 .lock()

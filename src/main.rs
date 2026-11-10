@@ -31,6 +31,7 @@ use crate::launch::Launch;
 use crate::logging::StderrLog;
 use crate::monitors::{Monitor, Monitors};
 use crate::presenter::{Console, Projector, projector_id};
+use crate::settings::Recent;
 use crate::timer::Goal;
 
 /// Present a PDF slide deck.
@@ -123,7 +124,7 @@ fn main() -> anyhow::Result<()> {
                 // Both windows paint black, so text must be light whatever the system theme.
                 cc.egui_ctx.set_theme(egui::Theme::Dark);
                 gui.get_or_init(|| cc.egui_ctx.clone());
-                let mut console = Console::new(monitors);
+                let mut console = Console::new(monitors, Recent::load(cc.storage));
                 if let Some((launch, deck)) = talk {
                     console.start(launch, deck, &cc.egui_ctx, cc.storage);
                 }
