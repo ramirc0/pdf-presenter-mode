@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -27,6 +27,9 @@ enum Spot {
     Window,
 }
 
+/// How long Identify labels each monitor.
+const IDENTIFY: Duration = Duration::from_secs(3);
+
 /// The width of the path field and the monitor map, in points.
 const WIDTH: f32 = 560.0;
 
@@ -47,6 +50,8 @@ pub struct Setup {
     focused: bool,
     /// The file chooser's answer, while it is open.
     chooser: Option<Receiver<Option<PathBuf>>>,
+    /// When the labels Identify put on the monitors go, while they show.
+    identify_until: Option<Instant>,
 }
 
 impl Setup {
@@ -87,6 +92,17 @@ impl Setup {
                     ui.vertical(|ui| {
                         ui.weak("Click a screen to put the audience there.");
                         self.show_map(ui, monitors, audience.as_deref(), presenter.as_deref());
+                        let identify =
+                            egui::Button::new("Identify").min_size(egui::vec2(120.0, 0.0));
+                        // A label on this window's own monitor would cover it, and a covered
+                        // window stops drawing, so it could not take the labels down.
+                        let clicked = ui
+                            .add_enabled(here.is_some(), identify)
+                            .on_hover_text("Show each monitor's name on it for 3 seconds")
+                            .clicked();
+                        if clicked {
+                            self.identify_until = Some(Instant::now() + IDENTIFY);
+                        }
                     });
                     ui.end_row();
                     ui.label("Audience");
@@ -112,7 +128,43 @@ impl Setup {
                     ui.end_row();
                 });
         });
+        self.show_labels(ui.ctx(), monitors, here);
         if start { self.launch(here) } else { None }
+    }
+
+    /// While Identify lasts, shows each monitor's name fullscreen on it, except on `here`.
+    fn show_labels(&mut self, ctx: &egui::Context, monitors: &[Monitor], here: Option<&str>) {
+        let Some(until) = self.identify_until else {
+            return;
+        };
+        let now = Instant::now();
+        if now >= until {
+            self.identify_until = None;
+            return;
+        }
+        ctx.request_repaint_after(until - now);
+        for (index, monitor) in monitors.iter().enumerate() {
+            if monitor.name.is_empty() || Some(monitor.name.as_str()) == here {
+                continue;
+            }
+            let builder = egui::ViewportBuilder::default()
+                .with_title("ppm identify")
+                .with_app_id("ppm")
+                .with_monitor(index);
+            let id = egui::ViewportId::from_hash_of(("identify", &monitor.name));
+            ctx.show_viewport_immediate(id, builder, |ui, _class| {
+                let area = ui.max_rect();
+                ui.painter().rect_filled(area, 0.0, egui::Color32::BLACK);
+                let [width, height] = monitor.pixels;
+                ui.painter().text(
+                    area.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{}\n{width}×{height}", monitor.name),
+                    egui::FontId::proportional(area.height() / 8.0),
+                    egui::Color32::WHITE,
+                );
+            });
+        }
     }
 
     /// The path field and the button for the file chooser. Leaving the field opens the deck.
