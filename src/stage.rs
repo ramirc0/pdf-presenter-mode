@@ -261,8 +261,9 @@ impl Stage {
         let elapsed = Duration::from_secs(self.talk.timer().elapsed(Instant::now()).as_secs());
         let schedule = self.notes.schedule;
         ui.horizontal(|ui| {
+            // One gap between every item, whichever of them show.
+            ui.spacing_mut().item_spacing.x = 16.0;
             ui.strong(wall.strftime("%H:%M").to_string());
-            ui.add_space(16.0);
             let paused = if self.talk.timer().paused() {
                 " (paused)"
             } else {
@@ -273,7 +274,6 @@ impl Stage {
                 clock_face(elapsed.try_into().unwrap_or_default())
             ));
             if let Some(left) = schedule.remaining(elapsed, wall.time()) {
-                ui.add_space(16.0);
                 let color = match schedule.urgency(left) {
                     Urgency::Calm => ui.visuals().text_color(),
                     Urgency::Closing => ui.visuals().warn_fg_color,
@@ -281,7 +281,6 @@ impl Stage {
                 };
                 ui.colored_label(color, format!("left {}", clock_face(left)));
             }
-            ui.add_space(16.0);
             ui.label(format!(
                 "slide {} / {}",
                 self.talk.slide() + 1,
