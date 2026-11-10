@@ -22,10 +22,14 @@ source "$root/tests/sway.sh"
 press() { wtype -s 300 "$@"; }
 key() { press -P "$1" -s 50 -p "$1"; }
 alt() { press -M alt -P "$1" -s 50 -p "$1" -m alt; }
-shot() { sleep 1; grim "$root/docs/$1.png"; echo "docs/$1.png"; }
+shot() { sleep 1; grim -o HEADLESS-1 "$root/docs/$1.png"; echo "docs/$1.png"; }
 
 typst compile "$root/docs/demo.typ" "$work/demo.pdf"
-start_sway 1 $'output HEADLESS-1 mode 2400x1500 scale 1.5\ndefault_border none'
+# A laptop panel, and a projector to its right for the audience.
+start_sway 2 $'output HEADLESS-1 mode 2400x1500 scale 1.5 pos 0 0
+output HEADLESS-2 mode 1920x1080 pos 1600 0
+default_border none'
+swaymsg focus output HEADLESS-1 >/dev/null
 nixGLIntel "$ppm" "$work/demo.pdf" --duration 20 > "$work/ppm.log" 2>&1 &
 sleep 2
 
@@ -41,3 +45,14 @@ shot overview
 key Escape
 key question
 shot shortcuts
+key Escape
+key q
+key q
+sleep 1
+
+# The start page, with the deck just presented among the recent ones.
+nixGLIntel "$ppm" >> "$work/ppm.log" 2>&1 &
+sleep 2
+press "$work/demo.pdf"
+key Tab
+shot start

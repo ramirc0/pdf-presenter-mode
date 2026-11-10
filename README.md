@@ -26,6 +26,7 @@ It targets Linux on Wayland and is developed on Hyprland.
 * For the Cargo route: Rust 1.95 or newer, plus the system's Wayland, xkbcommon and EGL libraries.
   On Arch: `pacman -S rust wayland libxkbcommon libglvnd mesa`.
 * For the Nix route: Nix with flakes. Outside NixOS, also [nixGL](https://github.com/nix-community/nixGL) for the GL driver.
+* For the start page's Open… button: an XDG desktop portal with a file chooser, such as xdg-desktop-portal-gtk, or zenity.
 
 ### Installing
 
@@ -38,6 +39,14 @@ cargo install --locked --git https://github.com/ramirc0/pdf-presenter-mode
 Use the system's `cargo` and `cc`. If a Nix profile puts its own first on `PATH`, the binary links Nix's glibc
 and cannot load the system's Wayland library. Run `PATH=/usr/bin:$PATH cargo install ...` instead.
 
+Cargo installs only the binary. To list ppm in app launchers and in "Open with" menus for PDFs, run:
+
+```
+ppm --install-desktop-entry
+```
+
+It writes `~/.local/share/applications/ppm.desktop`, which starts the binary by its full path.
+
 With Nix, install the flake's package into your profile:
 
 ```
@@ -45,6 +54,7 @@ nix profile install github:ramirc0/pdf-presenter-mode
 ```
 
 Outside NixOS, wrap the Nix build with nixGL, for example `nixGLIntel ppm deck.pdf`.
+The package ships its own desktop entry, so it needs no `--install-desktop-entry`.
 
 To build from source, enter the dev shell with `nix develop` or let direnv load it, then run `just` to list the tasks.
 
@@ -56,9 +66,20 @@ ppm deck.pdf
 
 * With an external monitor, the audience view opens fullscreen on it and the presenter view stays on the laptop.
 * `--audience DP-6` picks the monitor by connector name.
+* `--presenter eDP-1` puts the presenter view fullscreen on that monitor. The audience then skips it.
 * `--windowed-audience` opens the audience view as a normal window, for rehearsal and screen sharing.
 * `--duration 20` or `--end-time 14:30` sets the countdown. Both override the notes file.
 * `--notes talk.pdfpc` reads the notes from that file.
+
+Without a deck, `ppm` opens a start page. The desktop entry opens it too when started from a launcher.
+
+![The start page: the deck, recent decks, a map of the monitors, and where each view goes](docs/start.png)
+
+* Type the deck's path and press Enter, or pick it with Open… or from the recent decks.
+  The page shows the slide count and how many slides have notes, or why the deck did not open.
+* Click a monitor on the map to put the audience there. Identify shows each monitor's name on it for 3 seconds.
+* By default the audience takes the first external monitor, and the presenter goes fullscreen on the monitor the page is on.
+* The timer starts from the notes file's countdown. Type minutes or an end time to change it.
 
 Keys without a modifier:
 
@@ -87,6 +108,7 @@ Keys with Alt held:
 | Alt+`+`, Alt+`-` | larger or smaller notes |
 | Alt+`v` | switch between the slides-first and notes-first layouts |
 | Alt+`x` | swap the two windows' views |
+| Alt+`m` | move the audience to the next monitor, past the presenter's |
 
 Alt+`v` switches to the notes-first layout:
 
