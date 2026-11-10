@@ -1,12 +1,18 @@
-//! The root window, and the projector window it opens, moves and closes.
+//! The root window, from the start page to the presenter, and the projector window it opens, moves and closes.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use eframe::egui;
 
-use crate::monitors::{Monitors, audience_monitor};
-use crate::stage::{Stage, Window};
+use crate::deck::Deck;
+use crate::launch::Launch;
+use crate::monitors::{Monitors, audience_monitor, names_of};
+use crate::settings::Settings;
+use crate::setup::Setup;
+use crate::stage::{Repaint, Stage, Window};
 use crate::talk::Outcome;
+use crate::watch;
 
 /// Where the projector window goes.
 #[derive(Clone)]
@@ -46,9 +52,13 @@ pub fn projector_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("projector")
 }
 
-/// The root window. Each frame it also decides where the projector window goes.
+/// How often to look for a changed deck or notes file.
+const RELOAD_POLL: Duration = Duration::from_secs(1);
+
+/// The root window: the start page, then the presenter. During the talk it also decides
+/// where the projector window goes.
 pub struct Console {
-    stage: Arc<Mutex<Stage>>,
+    phase: Phase,
     monitors: Monitors,
     projector: Projector,
     /// The monitor name the projector window is on, or `None` while it is closed.
@@ -61,24 +71,60 @@ pub struct Console {
     checked: Vec<String>,
 }
 
+/// What the root window shows.
+enum Phase {
+    /// The start page, until it starts the talk.
+    Setup(Box<Setup>),
+    /// The talk, shared with the projector window.
+    Talk(Arc<Mutex<Stage>>),
+}
+
 impl Console {
-    /// A console over `stage`, placing the projector window by `projector` among `monitors`,
-    /// and the presenter fullscreen on the monitor named `presenter`, if any.
-    pub fn new(
-        stage: Arc<Mutex<Stage>>,
-        monitors: Monitors,
-        projector: Projector,
-        presenter: Option<String>,
-    ) -> Self {
+    /// The start page, for a talk on `monitors`.
+    pub fn new(monitors: Monitors) -> Self {
         Self {
-            stage,
+            phase: Phase::Setup(Box::default()),
             monitors,
-            projector,
+            projector: Projector::Monitor { requested: None },
             shown_on: None,
-            presenter,
+            presenter: None,
             presenter_on: None,
             checked: Vec::new(),
         }
+    }
+
+    /// Starts the talk `launch` describes, on its opened `deck`, with textures going to `ctx`
+    /// and the presenter preferences from `storage`.
+    pub fn start(
+        &mut self,
+        launch: Launch,
+        deck: Deck,
+        ctx: &egui::Context,
+        storage: Option<&dyn eframe::Storage>,
+    ) {
+        let repaint: Repaint = Arc::new({
+            let ctx = ctx.clone();
+            move || {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+                ctx.request_repaint_of(projector_id());
+            }
+        });
+        let reloads = watch::watch(
+            launch.watched(),
+            RELOAD_POLL,
+            {
+                let launch = launch.clone();
+                move || launch.open()
+            },
+            {
+                let repaint = repaint.clone();
+                move || repaint()
+            },
+        );
+        let stage = Stage::new(deck, Settings::load(storage), reloads, ctx.clone(), repaint);
+        self.projector = launch.audience;
+        self.presenter = launch.presenter;
+        self.phase = Phase::Talk(Arc::new(Mutex::new(stage)));
     }
 
     /// Warns about each requested monitor that is not connected, once per monitor list.
@@ -121,14 +167,14 @@ impl Console {
         }
     }
 
-    fn show_projector(&mut self, ctx: &egui::Context) {
+    fn show_projector(&mut self, ctx: &egui::Context, stage: &Arc<Mutex<Stage>>) {
         let builder = egui::ViewportBuilder::default()
             .with_title("ppm audience")
             .with_app_id("ppm");
         let placed = match &self.projector {
             Projector::Windowed => Some((builder, String::from("window"))),
             Projector::Monitor { requested } => {
-                let names = self.monitors.lock().expect("monitor list poisoned").clone();
+                let names = names_of(&self.monitors.lock().expect("monitor list poisoned"));
                 audience_monitor(&names, requested.as_deref(), self.presenter.as_deref()).map(
                     |index| {
                         // egui only moves the window when the index changes. A replug can
@@ -147,7 +193,7 @@ impl Console {
         let Some((builder, monitor)) = placed else {
             // Not showing the viewport this frame closes it, so it cannot land on the laptop panel.
             if self.shown_on.take().is_some() {
-                self.stage
+                stage
                     .lock()
                     .expect("stage poisoned")
                     .close(Window::Projector);
@@ -155,7 +201,7 @@ impl Console {
             return;
         };
         self.shown_on = Some(monitor);
-        let stage = self.stage.clone();
+        let stage = stage.clone();
         let monitors = self.monitors.clone();
         let projector = self.projector.clone();
         let presenter = self.presenter.clone();
@@ -163,7 +209,7 @@ impl Console {
             // After an unplug the compositor can move this window over the presenter. A covered
             // Wayland window gets no frame callbacks, so the presenter's ui, which closes this
             // window, stops running. Leaving fullscreen uncovers it.
-            let names = monitors.lock().expect("monitor list poisoned").clone();
+            let names = names_of(&monitors.lock().expect("monitor list poisoned"));
             if !projector.has_place(&names, presenter.as_deref()) {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
@@ -181,25 +227,42 @@ impl Console {
 }
 
 impl eframe::App for Console {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let names = self.monitors.lock().expect("monitor list poisoned").clone();
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let list = self.monitors.lock().expect("monitor list poisoned").clone();
+        let stage = match &mut self.phase {
+            Phase::Setup(setup) => {
+                let here = frame
+                    .winit_window()
+                    .and_then(|window| window.current_monitor())
+                    .and_then(|monitor| monitor.name());
+                if let Some((launch, deck)) = setup.show(ui, &list, here.as_deref()) {
+                    self.start(launch, deck, ui.ctx(), frame.storage());
+                    ui.ctx().request_repaint();
+                }
+                return;
+            }
+            Phase::Talk(stage) => stage.clone(),
+        };
+        let names = names_of(&list);
         self.report_missing(&names);
         self.place_presenter(ui.ctx(), &names);
         {
-            let mut stage = self.stage.lock().expect("stage poisoned");
+            let mut stage = stage.lock().expect("stage poisoned");
             if stage.handle_keys(ui) == Outcome::Quit {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
             stage.draw(ui, Window::Main);
         }
-        self.show_projector(ui.ctx());
+        self.show_projector(ui.ctx(), &stage);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.stage
-            .lock()
-            .expect("stage poisoned")
-            .settings()
-            .save(storage);
+        if let Phase::Talk(stage) = &self.phase {
+            stage
+                .lock()
+                .expect("stage poisoned")
+                .settings()
+                .save(storage);
+        }
     }
 }

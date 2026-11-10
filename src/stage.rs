@@ -482,7 +482,7 @@ fn split(
 }
 
 /// Scales every text style of `style` by `factor`.
-fn enlarge_text(style: &mut egui::Style, factor: f32) {
+pub fn enlarge_text(style: &mut egui::Style, factor: f32) {
     for font in style.text_styles.values_mut() {
         font.size *= factor;
     }

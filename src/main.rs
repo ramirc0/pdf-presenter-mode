@@ -3,19 +3,21 @@
 mod deck;
 mod fonts;
 mod keys;
+mod launch;
 mod logging;
 mod monitors;
 mod pdfpc;
 mod presenter;
 mod render;
 mod settings;
+mod setup;
 mod stage;
 mod talk;
 mod timer;
 mod watch;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -25,45 +27,45 @@ use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
-use crate::deck::Deck;
+use crate::launch::Launch;
 use crate::logging::StderrLog;
-use crate::monitors::Monitors;
+use crate::monitors::{Monitor, Monitors};
 use crate::presenter::{Console, Projector, projector_id};
-use crate::settings::Settings;
-use crate::stage::{Repaint, Stage};
 use crate::timer::Goal;
 
 /// Present a PDF slide deck.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    /// The PDF to present.
-    deck: PathBuf,
+    /// The PDF to present. Without it, a start page asks for one.
+    deck: Option<PathBuf>,
     /// Read speaker notes from this pdfpc file instead of the PDF's attachment or `<deck>.pdfpc`.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", requires = "deck")]
     notes: Option<PathBuf>,
     /// Put the audience window on this connector, such as DP-6, instead of the first external monitor.
-    #[arg(long, value_name = "CONNECTOR")]
+    #[arg(long, value_name = "CONNECTOR", requires = "deck")]
     audience: Option<String>,
     /// Count down from this many minutes, instead of the notes file's duration.
-    #[arg(long, value_name = "MINUTES", conflicts_with = "end_time")]
+    #[arg(
+        long,
+        value_name = "MINUTES",
+        conflicts_with = "end_time",
+        requires = "deck"
+    )]
     duration: Option<u64>,
     /// Count down to this local time, such as 14:30, instead of the notes file's end time.
-    #[arg(long, value_name = "HH:MM")]
+    #[arg(long, value_name = "HH:MM", requires = "deck")]
     end_time: Option<jiff::civil::Time>,
     /// Put the presenter view fullscreen on this connector, such as eDP-1, instead of a normal window.
-    #[arg(long, value_name = "CONNECTOR")]
+    #[arg(long, value_name = "CONNECTOR", requires = "deck")]
     presenter: Option<String>,
     /// Show the audience view as a normal window, for rehearsal and screen sharing.
-    #[arg(long, conflicts_with = "audience")]
+    #[arg(long, conflicts_with = "audience", requires = "deck")]
     windowed_audience: bool,
 }
 
 /// How often to look for a new or missing monitor.
 const MONITOR_POLL: Duration = Duration::from_secs(1);
-
-/// How often to look for a changed deck or notes file.
-const RELOAD_POLL: Duration = Duration::from_secs(1);
 
 static LOG: StderrLog = StderrLog::new();
 
@@ -74,30 +76,29 @@ fn main() -> anyhow::Result<()> {
     if cli.presenter.is_some() && cli.presenter == cli.audience {
         anyhow::bail!("--audience and --presenter name the same monitor");
     }
-    let goal = cli.end_time.map(Goal::EndsAt).or(cli
-        .duration
-        .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))));
-    let open = {
-        let (path, notes) = (cli.deck.clone(), cli.notes.clone());
-        move || -> anyhow::Result<Deck> {
-            let mut deck = Deck::open(&path, notes.as_deref())?;
-            if goal.is_some() {
-                deck.notes.schedule.goal = goal;
-            }
-            Ok(deck)
+    let talk = match cli.deck {
+        Some(deck) => {
+            let goal = cli.end_time.map(Goal::EndsAt).or(cli
+                .duration
+                .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))));
+            let audience = if cli.windowed_audience {
+                Projector::Windowed
+            } else {
+                Projector::Monitor {
+                    requested: cli.audience,
+                }
+            };
+            let launch = Launch {
+                deck,
+                notes: cli.notes,
+                audience,
+                presenter: cli.presenter,
+                goal,
+            };
+            let deck = launch.open()?;
+            Some((launch, deck))
         }
-    };
-    let deck = open()?;
-    let watched = vec![
-        cli.deck.clone(),
-        cli.notes.unwrap_or_else(|| deck::sidecar(&cli.deck)),
-    ];
-    let projector = if cli.windowed_audience {
-        Projector::Windowed
-    } else {
-        Projector::Monitor {
-            requested: cli.audience,
-        }
+        None => None,
     };
     let monitors = Monitors::default();
     let gui = Arc::new(OnceLock::new());
@@ -118,32 +119,15 @@ fn main() -> anyhow::Result<()> {
             let monitors = monitors.clone();
             let gui = gui.clone();
             move |cc| {
-                let ctx = cc.egui_ctx.clone();
-                fonts::install(&ctx);
+                fonts::install(&cc.egui_ctx);
                 // Both windows paint black, so text must be light whatever the system theme.
-                ctx.set_theme(egui::Theme::Dark);
-                gui.get_or_init(|| ctx.clone());
-                let repaint: Repaint = Arc::new(move || {
-                    ctx.request_repaint_of(egui::ViewportId::ROOT);
-                    ctx.request_repaint_of(projector_id());
-                });
-                let reloads = watch::watch(watched, RELOAD_POLL, open, {
-                    let repaint = repaint.clone();
-                    move || repaint()
-                });
-                let stage = Stage::new(
-                    deck,
-                    Settings::load(cc.storage),
-                    reloads,
-                    cc.egui_ctx.clone(),
-                    repaint,
-                );
-                Ok(Box::new(Console::new(
-                    Arc::new(Mutex::new(stage)),
-                    monitors,
-                    projector,
-                    cli.presenter,
-                )))
+                cc.egui_ctx.set_theme(egui::Theme::Dark);
+                gui.get_or_init(|| cc.egui_ctx.clone());
+                let mut console = Console::new(monitors);
+                if let Some((launch, deck)) = talk {
+                    console.start(launch, deck, &cc.egui_ctx, cc.storage);
+                }
+                Ok(Box::new(console))
             }
         }),
         &event_loop,
@@ -170,15 +154,28 @@ struct Windows<'a> {
 }
 
 impl Windows<'_> {
-    /// Updates the monitor names. A change repaints both windows, since either may be covered.
+    /// Updates the monitor list. A change repaints both windows, since either may be covered.
     fn track_monitors(&self, event_loop: &ActiveEventLoop) {
-        let names: Vec<String> = event_loop
+        let list: Vec<Monitor> = event_loop
             .available_monitors()
-            .map(|monitor| monitor.name().unwrap_or_default())
+            .map(|monitor| {
+                let scale = monitor.scale_factor();
+                let size = monitor.size();
+                let corner = monitor.position().to_logical::<f32>(scale);
+                let extent = size.to_logical::<f32>(scale);
+                Monitor {
+                    name: monitor.name().unwrap_or_default(),
+                    pixels: [size.width, size.height],
+                    area: egui::Rect::from_min_size(
+                        egui::pos2(corner.x, corner.y),
+                        egui::vec2(extent.width, extent.height),
+                    ),
+                }
+            })
             .collect();
         let mut current = self.monitors.lock().expect("monitor list poisoned");
-        if *current != names {
-            *current = names;
+        if *current != list {
+            *current = list;
             if let Some(ctx) = self.gui.get() {
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
                 ctx.request_repaint_of(projector_id());

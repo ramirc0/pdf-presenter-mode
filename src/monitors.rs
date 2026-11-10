@@ -2,8 +2,30 @@
 
 use std::sync::{Arc, Mutex};
 
-/// Monitor names in winit's `available_monitors()` order, shared by the event loop and the GUI.
-pub type Monitors = Arc<Mutex<Vec<String>>>;
+use eframe::egui;
+
+/// A connected monitor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Monitor {
+    /// The connector name, such as `DP-6`. Empty until a new Wayland output's name arrives.
+    pub name: String,
+    /// The width and height in physical pixels.
+    pub pixels: [u32; 2],
+    /// Where the compositor puts it, in logical pixels.
+    /// Wayland gives winit only whole scales, so with fractional scaling it comes out too small.
+    pub area: egui::Rect,
+}
+
+/// The connected monitors in winit's `available_monitors()` order, shared by the event loop and the GUI.
+pub type Monitors = Arc<Mutex<Vec<Monitor>>>;
+
+/// The names of `monitors`, in order.
+pub fn names_of(monitors: &[Monitor]) -> Vec<String> {
+    monitors
+        .iter()
+        .map(|monitor| monitor.name.clone())
+        .collect()
+}
 
 /// Connector prefixes of built-in laptop panels.
 const INTERNAL: [&str; 3] = ["eDP-", "LVDS-", "DSI-"];

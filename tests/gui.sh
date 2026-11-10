@@ -80,6 +80,17 @@ swaymsg focus output "$second" >/dev/null
 nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --presenter HEADLESS-1 >> "$work/ppm.log" 2>&1 &
 expect "--presenter puts the presenter fullscreen there" "HEADLESS-1 fullscreen" presenter
 expect "the audience skips the presenter's monitor" "$second fullscreen"
+pkill -x -P "$$" ppm; sleep 0.5
+
+# Without a deck, the start page asks for one. Typing a path and Enter starts the talk.
+swaymsg focus output HEADLESS-1 >/dev/null
+nixGLIntel "$ppm" >> "$work/ppm.log" 2>&1 &
+expect "the start page opens without an audience" "none"
+expect "the start page is a normal window" "HEADLESS-1" presenter
+wtype -s 300 "$root/fixtures/basic.pdf"
+wtype -s 100 -P Return -s 50 -p Return
+expect "Enter starts the talk with the presenter where the page was" "HEADLESS-1 fullscreen" presenter
+expect "Enter starts the talk with the audience outside" "$second fullscreen"
 
 if [ "$failures" -gt 0 ]; then
   echo "ppm log:"; cat "$work/ppm.log"
