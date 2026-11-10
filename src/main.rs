@@ -133,6 +133,8 @@ fn main() -> anyhow::Result<()> {
                 fonts::install(&cc.egui_ctx);
                 // Both windows paint black, so text must be light whatever the system theme.
                 cc.egui_ctx.set_theme(egui::Theme::Dark);
+                cc.egui_ctx
+                    .all_styles_mut(|style| square_corners(&mut style.visuals));
                 gui.get_or_init(|| cc.egui_ctx.clone());
                 let mut console = Console::new(monitors, Recent::load(cc.storage));
                 if let Some((launch, deck)) = talk {
@@ -154,6 +156,22 @@ fn main() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Removes the rounding from every widget, window and menu.
+fn square_corners(visuals: &mut egui::Visuals) {
+    visuals.window_corner_radius = egui::CornerRadius::ZERO;
+    visuals.menu_corner_radius = egui::CornerRadius::ZERO;
+    let widgets = &mut visuals.widgets;
+    for look in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        look.corner_radius = egui::CornerRadius::ZERO;
+    }
 }
 
 /// Runs eframe on our own winit loop, which gives access to the monitor list.

@@ -315,7 +315,7 @@ impl Setup {
             let painter = ui.painter();
             painter.rect(
                 tile,
-                4.0,
+                0.0,
                 look.bg_fill,
                 look.bg_stroke,
                 egui::StrokeKind::Inside,
