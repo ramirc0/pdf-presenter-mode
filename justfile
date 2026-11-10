@@ -25,3 +25,8 @@ fixtures:
 gui-test:
     cargo build
     tests/gui.sh target/debug/ppm
+
+# Retake the README screenshots in a headless sway.
+screenshots:
+    cargo build
+    docs/screenshots.sh target/debug/ppm

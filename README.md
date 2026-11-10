@@ -2,6 +2,8 @@
 
 A light presenter console for PDF slide decks, with speaker notes and a talk timer.
 
+![The presenter view: the current slide, the next slide, Markdown notes and the status bar](docs/presenter.png)
+
 ## Description
 
 `ppm` shows a PDF fullscreen on the projector and a presenter view on the laptop.
@@ -72,6 +74,16 @@ Keys with Alt held:
 | Alt+`+`, Alt+`-` | larger or smaller notes |
 | Alt+`v` | switch between the slides-first and notes-first layouts |
 | Alt+`x` | swap the two windows' views |
+
+Alt+`v` switches to the notes-first layout:
+
+![The notes-first layout: the current and next slides on the left, the notes on the right](docs/notes-first.png)
+
+Tab opens the overview, and `?` shows every shortcut:
+
+![The overview: every slide in a grid, with the selected one outlined](docs/overview.png)
+
+![The shortcut hint over the presenter view](docs/shortcuts.png)
 
 Drag the lines between the presenter panels to resize them.
 The layout, the panel sizes and the notes size are saved in `~/.local/share/ppm`.
