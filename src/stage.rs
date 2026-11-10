@@ -160,20 +160,14 @@ impl Stage {
             Layout::NotesFirst => left,
         };
         let (top, bottom) = split(ui, "rows", side, &mut splits.rows, false);
-        let [left, right, top, bottom] = [left, right, top, bottom].map(|r| r.shrink(MARGIN));
-        let (current, next) = (Some(self.talk.slide()), self.talk.next_slide());
-        match layout {
-            Layout::SlidesFirst => {
-                self.show_slide(ui, window, current, left);
-                self.show_slide(ui, window, next, top);
-                self.show_notes(ui, bottom);
-            }
-            Layout::NotesFirst => {
-                self.show_slide(ui, window, current, top);
-                self.show_slide(ui, window, next, bottom);
-                self.show_notes(ui, right);
-            }
+        let [current, next, notes] = match layout {
+            Layout::SlidesFirst => [left, top, bottom],
+            Layout::NotesFirst => [top, bottom, right],
         }
+        .map(|r| r.shrink(MARGIN));
+        self.show_slide(ui, window, Some(self.talk.slide()), current);
+        self.show_slide(ui, window, self.talk.next_slide(), next);
+        self.show_notes(ui, notes);
     }
 
     /// Every slide in a grid. The selected one is outlined, and a click jumps to a slide.
