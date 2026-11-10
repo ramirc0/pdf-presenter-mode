@@ -24,13 +24,15 @@ key() { press -P "$1" -s 50 -p "$1"; }
 alt() { press -M alt -P "$1" -s 50 -p "$1" -m alt; }
 shot() { sleep 1; grim -o HEADLESS-1 "$root/docs/$1.png"; echo "docs/$1.png"; }
 
-typst compile "$root/docs/demo.typ" "$work/demo.pdf"
+# ppm runs with HOME set to $work, so the start page shows the deck under ~ instead of a temporary path.
+mkdir -p "$work/talks"
+typst compile "$root/docs/demo.typ" "$work/talks/tides.pdf"
 # A laptop panel, and a projector to its right for the audience.
 start_sway 2 $'output HEADLESS-1 mode 2400x1500 scale 1.5 pos 0 0
 output HEADLESS-2 mode 1920x1080 pos 1600 0
 default_border none'
 swaymsg focus output HEADLESS-1 >/dev/null
-nixGLIntel "$ppm" "$work/demo.pdf" --duration 20 > "$work/ppm.log" 2>&1 &
+HOME=$work nixGLIntel "$ppm" "$work/talks/tides.pdf" --duration 20 > "$work/ppm.log" 2>&1 &
 sleep 2
 
 key Right
@@ -51,8 +53,9 @@ key q
 sleep 1
 
 # The start page, with the deck just presented among the recent ones.
-nixGLIntel "$ppm" >> "$work/ppm.log" 2>&1 &
+HOME=$work nixGLIntel "$ppm" >> "$work/ppm.log" 2>&1 &
 sleep 2
-press "$work/demo.pdf"
+# shellcheck disable=SC2088 # ppm expands the ~ itself, as typed.
+press "~/talks/tides.pdf"
 key Tab
 shot start
