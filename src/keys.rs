@@ -115,6 +115,12 @@ pub const BINDINGS: &[Binding] = &[
         does: "freeze the audience, or let it follow again",
     },
     Binding {
+        keys: &[Key::L],
+        alt: true,
+        action: Action::Laser,
+        does: "laser pointer: point with the mouse on the current slide",
+    },
+    Binding {
         keys: &[Key::S],
         alt: true,
         action: Action::StartTimer,
@@ -251,6 +257,12 @@ mod tests {
     fn swap_needs_alt() {
         assert_eq!(action_for(Key::X, NONE), None);
         assert_eq!(action_for(Key::X, ALT), Some(Action::Swap));
+    }
+
+    #[test]
+    fn the_laser_needs_alt() {
+        assert_eq!(action_for(Key::L, ALT), Some(Action::Laser));
+        assert_eq!(action_for(Key::L, NONE), Some(Action::Next));
     }
 
     #[test]

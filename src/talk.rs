@@ -38,6 +38,8 @@ pub enum Action {
     Blank,
     /// Keep the audience on the current slide while the presenter moves on, or let it follow again.
     Freeze,
+    /// Show the mouse on the current slide to the audience as a laser dot, or stop.
+    Laser,
     /// Start or resume the timer.
     StartTimer,
     /// Pause or resume the timer.
@@ -78,6 +80,7 @@ pub struct Talk {
     blanked: bool,
     /// The slide the audience stays on, while frozen.
     frozen: Option<usize>,
+    laser: bool,
     /// The slide number typed so far after `g`, 0 before the first digit.
     goto: Option<usize>,
     /// The slide selected in the overview, while it is open.
@@ -97,6 +100,7 @@ impl Talk {
             swapped: false,
             blanked: false,
             frozen: None,
+            laser: false,
             goto: None,
             overview: None,
             timer: Timer::default(),
@@ -176,6 +180,11 @@ impl Talk {
     /// Whether the audience stays on one slide while the presenter moves.
     pub fn frozen(&self) -> bool {
         self.frozen.is_some()
+    }
+
+    /// Whether the mouse on the current slide shows to the audience as a laser dot.
+    pub fn laser(&self) -> bool {
+        self.laser
     }
 
     /// Whether the presenter window shows the audience view and the other way around.
@@ -301,6 +310,7 @@ impl Talk {
                     None => Some(self.slide),
                 }
             }
+            Action::Laser => self.laser = !self.laser,
             Action::StartTimer => self.timer.start(now),
             Action::PauseTimer => self.timer.toggle_pause(now),
             Action::ResetTimer => self.timer.reset(),
@@ -491,6 +501,18 @@ mod tests {
         assert_eq!(talk.audience_slide(), Some(0));
         talk.apply(Action::Freeze, Instant::now());
         assert_eq!(talk.audience_slide(), Some(2));
+    }
+
+    #[test]
+    fn the_laser_toggles_and_stays_on_across_slides() {
+        let mut talk = Talk::new(3, Settings::default());
+        assert!(!talk.laser());
+        talk.apply(Action::Laser, Instant::now());
+        talk.apply(Action::Next, Instant::now());
+        talk.apply(Action::Cancel, Instant::now());
+        assert!(talk.laser());
+        talk.apply(Action::Laser, Instant::now());
+        assert!(!talk.laser());
     }
 
     #[test]

@@ -49,6 +49,9 @@ pub struct Stage {
     shown: [Vec<Target>; 2],
     /// The overview thumbnails each window drew in its last frame. They render last.
     thumbnails: [Vec<Target>; 2],
+    /// Where the mouse points on the current slide while the laser is on,
+    /// as fractions of the slide's width and height.
+    laser: Option<egui::Pos2>,
     repaint: Repaint,
 }
 
@@ -73,6 +76,7 @@ impl Stage {
             reloads,
             shown: [Vec::new(), Vec::new()],
             thumbnails: [Vec::new(), Vec::new()],
+            laser: None,
             repaint,
         }
     }
@@ -123,7 +127,12 @@ impl Stage {
         match view_of(window, self.talk.swapped()) {
             View::Audience => {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-                self.show_slide(ui, window, self.talk.audience_slide(), ui.max_rect());
+                let slide = self.talk.audience_slide();
+                let shown = self.show_slide(ui, window, slide, ui.max_rect());
+                // Frozen on another slide, the audience cannot see what the speaker points at.
+                if slide == Some(self.talk.slide()) {
+                    self.show_laser(ui, shown);
+                }
             }
             View::Presenter => self.draw_presenter(ui, window),
         }
@@ -142,6 +151,7 @@ impl Stage {
         let body = ui.available_rect_before_wrap();
         if let Some(selected) = self.talk.overview() {
             self.show_overview(ui, window, body, selected);
+            self.aim(ui, None);
         } else {
             self.show_panels(ui, window, body);
         }
@@ -165,7 +175,9 @@ impl Stage {
             Layout::NotesFirst => [top, bottom, right],
         }
         .map(|r| r.shrink(MARGIN));
-        self.show_slide(ui, window, Some(self.talk.slide()), current);
+        let shown = self.show_slide(ui, window, Some(self.talk.slide()), current);
+        self.aim(ui, shown);
+        self.show_laser(ui, shown);
         self.show_slide(ui, window, self.talk.next_slide(), next);
         self.show_notes(ui, notes);
     }
@@ -206,11 +218,47 @@ impl Stage {
         }
     }
 
-    /// Draws `page`, if the deck has it, fitted into `rect`, and records the render it needs.
-    fn show_slide(&mut self, ui: &egui::Ui, window: Window, page: Option<usize>, rect: egui::Rect) {
-        if let Some(placed) = self.paint(ui, page, rect) {
-            self.shown[window as usize].push(placed.target);
+    /// Draws `page`, if the deck has it, fitted into `rect`, records the render it needs,
+    /// and says where the page went.
+    fn show_slide(
+        &mut self,
+        ui: &egui::Ui,
+        window: Window,
+        page: Option<usize>,
+        rect: egui::Rect,
+    ) -> Option<egui::Rect> {
+        let placed = self.paint(ui, page, rect)?;
+        self.shown[window as usize].push(placed.target);
+        Some(placed.rect)
+    }
+
+    /// Points the laser where the mouse is on `slide`, the current slide's rect, while the laser is on.
+    /// A move repaints both windows, so the audience follows.
+    fn aim(&mut self, ui: &egui::Ui, slide: Option<egui::Rect>) {
+        let aimed = slide.filter(|_| self.talk.laser()).and_then(|rect| {
+            let pos = ui
+                .input(|input| input.pointer.hover_pos())
+                .filter(|_| ui.rect_contains_pointer(rect))?;
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+            Some(((pos - rect.min) / rect.size()).to_pos2())
+        });
+        if aimed != self.laser {
+            self.laser = aimed;
+            (self.repaint)();
         }
+    }
+
+    /// Draws the laser dot on `slide`, the rect of a picture of the current slide.
+    fn show_laser(&self, ui: &egui::Ui, slide: Option<egui::Rect>) {
+        // A window that stopped drawing leaves its last aim behind. Turning the laser off still hides it.
+        let (Some(rect), Some(at)) = (slide, self.laser.filter(|_| self.talk.laser())) else {
+            return;
+        };
+        let center = rect.min + at.to_vec2() * rect.size();
+        let radius = rect.height() * LASER_RADIUS;
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.circle_filled(center, 2.0 * radius, LASER.gamma_multiply(0.3));
+        painter.circle_filled(center, radius, LASER);
     }
 
     /// Draws `page`, if the deck has it, fitted into `rect`, and says where it went.
@@ -302,6 +350,9 @@ impl Stage {
             if self.talk.frozen() {
                 badge(ui, " FROZEN ");
             }
+            if self.talk.laser() {
+                badge(ui, " LASER ");
+            }
             if self.talk.quit_armed() {
                 ui.colored_label(ui.visuals().warn_fg_color, "Press q again to quit");
             }
@@ -311,6 +362,12 @@ impl Stage {
 
 /// The gap in points between a panel's edge and its content.
 const MARGIN: f32 = 8.0;
+
+/// The color of the laser dot.
+const LASER: egui::Color32 = egui::Color32::from_rgb(255, 32, 32);
+
+/// The laser dot's radius, as a fraction of the slide's height.
+const LASER_RADIUS: f32 = 0.008;
 
 /// Splits `rect` side by side or top to bottom, giving the first part `share` of it.
 /// Dragging the seam changes `share`, within 0.1 to 0.9.
@@ -420,6 +477,122 @@ fn plan<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window size of the headless frames.
+    const SCREEN: egui::Rect =
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1920.0, 1200.0));
+
+    /// A spot inside the current slide of the slides-first layout on `SCREEN`.
+    const ON_SLIDE: egui::Pos2 = egui::pos2(576.0, 540.0);
+
+    /// A stage presenting the fixture deck, with textures going to `ctx`.
+    fn fixture_stage(ctx: &egui::Context) -> Stage {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/basic.pdf");
+        let deck = Deck::open(&path, None).unwrap();
+        let (_, reloads) = std::sync::mpsc::channel();
+        Stage::new(
+            deck,
+            Settings::default(),
+            reloads,
+            ctx.clone(),
+            Arc::new(|| {}),
+        )
+    }
+
+    /// Draws one frame of `window` with the mouse at `mouse`, or outside the window,
+    /// and returns the centers of the laser dots drawn.
+    fn frame(
+        ctx: &egui::Context,
+        stage: &mut Stage,
+        window: Window,
+        mouse: Option<egui::Pos2>,
+    ) -> Vec<egui::Pos2> {
+        let input = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            events: vec![mouse.map_or(egui::Event::PointerGone, egui::Event::PointerMoved)],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| stage.draw(ui, window));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Circle(circle) if circle.fill == LASER => Some(circle.center),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Turns the laser on and points at `ON_SLIDE` in the presenter view.
+    fn point(ctx: &egui::Context, stage: &mut Stage) -> Vec<egui::Pos2> {
+        stage.talk.apply(Action::Laser, Instant::now());
+        frame(ctx, stage, Window::Main, Some(ON_SLIDE))
+    }
+
+    #[test]
+    fn the_laser_starts_off() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        assert!(frame(&ctx, &mut stage, Window::Main, Some(ON_SLIDE)).is_empty());
+        assert!(frame(&ctx, &mut stage, Window::Projector, None).is_empty());
+    }
+
+    #[test]
+    fn the_audience_sees_the_dot_where_the_speaker_points() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        let presenter = point(&ctx, &mut stage);
+        assert_eq!(presenter.len(), 1);
+        assert!((presenter[0] - ON_SLIDE).length() < 1e-3, "{presenter:?}");
+        let at = stage.laser.unwrap();
+        let slide = place(0, stage.pages[0], SCREEN, 1.0).unwrap().rect;
+        let audience = frame(&ctx, &mut stage, Window::Projector, None);
+        assert_eq!(audience.len(), 1);
+        let want = slide.min + at.to_vec2() * slide.size();
+        assert!(
+            (audience[0] - want).length() < 1e-3,
+            "{audience:?} != {want:?}"
+        );
+    }
+
+    #[test]
+    fn the_dot_goes_when_the_mouse_leaves() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        point(&ctx, &mut stage);
+        assert!(frame(&ctx, &mut stage, Window::Main, None).is_empty());
+        assert!(frame(&ctx, &mut stage, Window::Projector, None).is_empty());
+    }
+
+    #[test]
+    fn turning_the_laser_off_hides_the_dot_from_the_audience_at_once() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        point(&ctx, &mut stage);
+        stage.talk.apply(Action::Laser, Instant::now());
+        assert!(frame(&ctx, &mut stage, Window::Projector, None).is_empty());
+    }
+
+    #[test]
+    fn a_frozen_audience_does_not_see_the_dot_on_another_slide() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Freeze, Instant::now());
+        stage.talk.apply(Action::Next, Instant::now());
+        assert_eq!(point(&ctx, &mut stage).len(), 1);
+        assert!(frame(&ctx, &mut stage, Window::Projector, None).is_empty());
+    }
+
+    #[test]
+    fn the_overview_hides_the_dot() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        point(&ctx, &mut stage);
+        stage.talk.apply(Action::Overview, Instant::now());
+        assert!(frame(&ctx, &mut stage, Window::Main, Some(ON_SLIDE)).is_empty());
+        assert!(frame(&ctx, &mut stage, Window::Projector, None).is_empty());
+    }
 
     fn at(page: usize, width: u16) -> Target {
         Target {

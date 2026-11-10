@@ -80,6 +80,7 @@ Keys with Alt held:
 | Keys | Action |
 |---|---|
 | Alt+`f` | freeze the audience on the current slide |
+| Alt+`l` | laser pointer: a red dot on the audience follows the mouse on the current slide |
 | Alt+`s`, Alt+`p`, Alt+`r` | start, pause, or reset the timer |
 | Alt+`+`, Alt+`-` | larger or smaller notes |
 | Alt+`v` | switch between the slides-first and notes-first layouts |
