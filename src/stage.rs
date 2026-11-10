@@ -52,7 +52,17 @@ pub struct Stage {
     /// Where the mouse points on the current slide while the laser is on,
     /// as fractions of the slide's width and height.
     laser: Option<egui::Pos2>,
+    /// Lines drawn with the laser, oldest first. The last one grows while its drag lasts.
+    ink: Vec<Stroke>,
     repaint: Repaint,
+}
+
+/// A line of ink on one slide.
+struct Stroke {
+    /// The slide it was drawn on.
+    slide: usize,
+    /// Where the line runs, as fractions of the slide's width and height.
+    points: Vec<egui::Pos2>,
 }
 
 impl Stage {
@@ -77,6 +87,7 @@ impl Stage {
             shown: [Vec::new(), Vec::new()],
             thumbnails: [Vec::new(), Vec::new()],
             laser: None,
+            ink: Vec::new(),
             repaint,
         }
     }
@@ -99,6 +110,10 @@ impl Stage {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
+            if action == Action::Erase {
+                let slide = self.talk.slide();
+                self.ink.retain(|stroke| stroke.slide != slide);
+            }
             if self.talk.apply(action, Instant::now()) == Outcome::Quit {
                 return Outcome::Quit;
             }
@@ -118,6 +133,8 @@ impl Stage {
             self.talk.reload(deck.pages.len());
             self.pages = deck.pages;
             self.notes = deck.notes;
+            // The ink marks spots on the old pages, which may have moved.
+            self.ink.clear();
             // A new renderer has no textures, so no page of the old deck can show.
             self.renderer = Renderer::new(ui.ctx().clone(), deck.pdf, self.repaint.clone());
         }
@@ -177,6 +194,7 @@ impl Stage {
         .map(|r| r.shrink(MARGIN));
         let shown = self.show_slide(ui, window, Some(self.talk.slide()), current);
         self.aim(ui, shown);
+        self.scribble(ui, shown);
         self.show_laser(ui, shown);
         self.show_slide(ui, window, self.talk.next_slide(), next);
         self.show_notes(ui, notes);
@@ -240,10 +258,42 @@ impl Stage {
                 .input(|input| input.pointer.hover_pos())
                 .filter(|_| ui.rect_contains_pointer(rect))?;
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            Some(((pos - rect.min) / rect.size()).to_pos2())
+            Some(fraction_of(rect, pos))
         });
         if aimed != self.laser {
             self.laser = aimed;
+            (self.repaint)();
+        }
+    }
+
+    /// While the laser is on, draws ink where the left button drags on `slide`, the current slide's rect.
+    /// Only a drag that starts on the slide draws, so resizing the panels never does.
+    fn scribble(&mut self, ui: &egui::Ui, slide: Option<egui::Rect>) {
+        let Some(rect) = slide.filter(|_| self.talk.laser()) else {
+            return;
+        };
+        let drag = ui.interact(rect, ui.scope_id().with("ink"), egui::Sense::drag());
+        let page = self.talk.slide();
+        if drag.drag_started_by(egui::PointerButton::Primary) {
+            self.ink.push(Stroke {
+                slide: page,
+                points: Vec::new(),
+            });
+        }
+        let Some(pos) = drag
+            .interact_pointer_pos()
+            .filter(|_| drag.dragged_by(egui::PointerButton::Primary))
+        else {
+            return;
+        };
+        // An erase or a slide change mid-drag can leave the last line on another slide.
+        let Some(stroke) = self.ink.last_mut().filter(|stroke| stroke.slide == page) else {
+            return;
+        };
+        let at = fraction_of(rect, pos);
+        // Each repaint runs this again, so a repaint for a button held still would never stop.
+        if stroke.points.last() != Some(&at) {
+            stroke.points.push(at);
             (self.repaint)();
         }
     }
@@ -254,14 +304,14 @@ impl Stage {
         let (Some(rect), Some(at)) = (slide, self.laser.filter(|_| self.talk.laser())) else {
             return;
         };
-        let center = rect.min + at.to_vec2() * rect.size();
+        let center = rect.lerp_inside(at.to_vec2());
         let radius = rect.height() * LASER_RADIUS;
         let painter = ui.painter().with_clip_rect(rect);
         painter.circle_filled(center, 2.0 * radius, LASER.gamma_multiply(0.3));
         painter.circle_filled(center, radius, LASER);
     }
 
-    /// Draws `page`, if the deck has it, fitted into `rect`, and says where it went.
+    /// Draws `page` with its ink, if the deck has it, fitted into `rect`, and says where it went.
     /// Until its render arrives, a render of the same page at another size stands in.
     fn paint(&self, ui: &egui::Ui, page: Option<usize>, rect: egui::Rect) -> Option<Placement> {
         let page = page.filter(|&page| page < self.pages.len())?;
@@ -271,7 +321,21 @@ impl Stage {
             ui.painter()
                 .image(texture.id(), placed.rect, uv, egui::Color32::WHITE);
         }
+        self.show_ink(ui, page, placed.rect);
         Some(placed)
+    }
+
+    /// Draws the ink on `page` over its picture at `rect`.
+    fn show_ink(&self, ui: &egui::Ui, page: usize, rect: egui::Rect) {
+        let painter = ui.painter().with_clip_rect(rect);
+        let pen = egui::Stroke::new(rect.height() * INK_WIDTH, LASER);
+        for stroke in self.ink.iter().filter(|stroke| stroke.slide == page) {
+            let points = stroke
+                .points
+                .iter()
+                .map(|&at| rect.lerp_inside(at.to_vec2()));
+            painter.line(points.collect(), pen);
+        }
     }
 
     fn show_notes(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -368,6 +432,14 @@ const LASER: egui::Color32 = egui::Color32::from_rgb(255, 32, 32);
 
 /// The laser dot's radius, as a fraction of the slide's height.
 const LASER_RADIUS: f32 = 0.008;
+
+/// The ink's width, as a fraction of the slide's height.
+const INK_WIDTH: f32 = 0.006;
+
+/// Where `pos` falls on `rect`, as fractions of its width and height.
+fn fraction_of(rect: egui::Rect, pos: egui::Pos2) -> egui::Pos2 {
+    ((pos - rect.min) / rect.size()).to_pos2()
+}
 
 /// Splits `rect` side by side or top to bottom, giving the first part `share` of it.
 /// Dragging the seam changes `share`, within 0.1 to 0.9.
@@ -485,18 +557,52 @@ mod tests {
     /// A spot inside the current slide of the slides-first layout on `SCREEN`.
     const ON_SLIDE: egui::Pos2 = egui::pos2(576.0, 540.0);
 
+    /// Another spot on the current slide, where the test drags end.
+    const DRAG_TO: egui::Pos2 = egui::pos2(700.0, 600.0);
+
+    /// A spot on the next-slide panel of the slides-first layout on `SCREEN`.
+    const OFF_SLIDE: egui::Pos2 = egui::pos2(1600.0, 250.0);
+
+    /// The deck the tests present.
+    fn fixture_deck() -> Deck {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/basic.pdf");
+        Deck::open(&path, None).unwrap()
+    }
+
     /// A stage presenting the fixture deck, with textures going to `ctx`.
     fn fixture_stage(ctx: &egui::Context) -> Stage {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/basic.pdf");
-        let deck = Deck::open(&path, None).unwrap();
         let (_, reloads) = std::sync::mpsc::channel();
         Stage::new(
-            deck,
+            fixture_deck(),
             Settings::default(),
             reloads,
             ctx.clone(),
             Arc::new(|| {}),
         )
+    }
+
+    /// Runs one frame of `window` on `events`, as `presenter.rs` does, and returns its shapes.
+    fn shapes(
+        ctx: &egui::Context,
+        stage: &mut Stage,
+        window: Window,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::Shape> {
+        let input = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            stage.handle_keys(ui);
+            stage.draw(ui, window);
+        });
+        output.textures_delta.clear();
+        output
+            .shapes
+            .into_iter()
+            .map(|clipped| clipped.shape)
+            .collect()
     }
 
     /// Draws one frame of `window` with the mouse at `mouse`, or outside the window,
@@ -507,21 +613,57 @@ mod tests {
         window: Window,
         mouse: Option<egui::Pos2>,
     ) -> Vec<egui::Pos2> {
-        let input = egui::RawInput {
-            screen_rect: Some(SCREEN),
-            events: vec![mouse.map_or(egui::Event::PointerGone, egui::Event::PointerMoved)],
-            ..Default::default()
-        };
-        let mut output = ctx.run_ui(input, |ui| stage.draw(ui, window));
-        output.textures_delta.clear();
-        output
-            .shapes
-            .iter()
-            .filter_map(|clipped| match &clipped.shape {
+        let event = mouse.map_or(egui::Event::PointerGone, egui::Event::PointerMoved);
+        shapes(ctx, stage, window, vec![event])
+            .into_iter()
+            .filter_map(|shape| match shape {
                 egui::Shape::Circle(circle) if circle.fill == LASER => Some(circle.center),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Draws one frame of `window` and returns the points of its ink lines.
+    fn ink(ctx: &egui::Context, stage: &mut Stage, window: Window) -> Vec<Vec<egui::Pos2>> {
+        let red = egui::epaint::ColorMode::Solid(LASER);
+        shapes(ctx, stage, window, Vec::new())
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Path(path) if path.stroke.color == red => Some(path.points),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The left button going down, or up, at `pos`.
+    fn left_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// Drags with the left button from `from` to `to` in the presenter view.
+    fn drag(ctx: &egui::Context, stage: &mut Stage, from: egui::Pos2, to: egui::Pos2) {
+        for event in [
+            egui::Event::PointerMoved(from),
+            left_button(from, true),
+            egui::Event::PointerMoved(to),
+            left_button(to, false),
+        ] {
+            shapes(ctx, stage, Window::Main, vec![event]);
+        }
+    }
+
+    /// Asserts that the lines `got` run through the points `want`, give or take rounding.
+    fn assert_lines(got: &[Vec<egui::Pos2>], want: &[Vec<egui::Pos2>]) {
+        let near = |a: &Vec<egui::Pos2>, b: &Vec<egui::Pos2>| {
+            a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (*p - *q).length() < 1e-3)
+        };
+        let same = got.len() == want.len() && got.iter().zip(want).all(|(a, b)| near(a, b));
+        assert!(same, "{got:?} != {want:?}");
     }
 
     /// Turns the laser on and points at `ON_SLIDE` in the presenter view.
@@ -592,6 +734,104 @@ mod tests {
         stage.talk.apply(Action::Overview, Instant::now());
         assert!(frame(&ctx, &mut stage, Window::Main, Some(ON_SLIDE)).is_empty());
         assert!(frame(&ctx, &mut stage, Window::Projector, None).is_empty());
+    }
+
+    #[test]
+    fn a_drag_on_the_slide_draws_ink_on_both_views() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Laser, Instant::now());
+        drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
+        assert_lines(
+            &ink(&ctx, &mut stage, Window::Main),
+            &[vec![ON_SLIDE, DRAG_TO]],
+        );
+        let slide = place(0, stage.pages[0], SCREEN, 1.0).unwrap().rect;
+        let points = stage.ink[0].points.iter();
+        let want = points.map(|&at| slide.lerp_inside(at.to_vec2())).collect();
+        assert_lines(&ink(&ctx, &mut stage, Window::Projector), &[want]);
+    }
+
+    #[test]
+    fn a_drag_draws_nothing_with_the_laser_off() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
+        assert!(ink(&ctx, &mut stage, Window::Main).is_empty());
+    }
+
+    #[test]
+    fn a_drag_from_off_the_slide_draws_nothing() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Laser, Instant::now());
+        drag(&ctx, &mut stage, OFF_SLIDE, ON_SLIDE);
+        assert!(ink(&ctx, &mut stage, Window::Main).is_empty());
+    }
+
+    #[test]
+    fn the_ink_stays_with_its_slide() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Laser, Instant::now());
+        drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
+        stage.talk.apply(Action::Next, Instant::now());
+        assert!(ink(&ctx, &mut stage, Window::Main).is_empty());
+        assert!(ink(&ctx, &mut stage, Window::Projector).is_empty());
+        stage.talk.apply(Action::Previous, Instant::now());
+        assert_eq!(ink(&ctx, &mut stage, Window::Main).len(), 1);
+    }
+
+    #[test]
+    fn alt_e_erases_the_ink_on_the_current_slide_only() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Laser, Instant::now());
+        drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
+        stage.talk.apply(Action::Next, Instant::now());
+        drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
+        let alt_e = egui::Event::Key {
+            key: egui::Key::E,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        };
+        shapes(&ctx, &mut stage, Window::Main, vec![alt_e]);
+        assert!(ink(&ctx, &mut stage, Window::Main).is_empty());
+        stage.talk.apply(Action::Previous, Instant::now());
+        assert_eq!(ink(&ctx, &mut stage, Window::Main).len(), 1);
+    }
+
+    #[test]
+    fn a_reload_erases_the_ink() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Laser, Instant::now());
+        drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
+        let (reload, reloads) = std::sync::mpsc::channel();
+        stage.reloads = reloads;
+        reload.send(fixture_deck()).unwrap();
+        assert!(ink(&ctx, &mut stage, Window::Main).is_empty());
+    }
+
+    #[test]
+    fn a_held_button_adds_no_points() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Laser, Instant::now());
+        frame(&ctx, &mut stage, Window::Main, Some(ON_SLIDE));
+        shapes(
+            &ctx,
+            &mut stage,
+            Window::Main,
+            vec![left_button(ON_SLIDE, true)],
+        );
+        for _ in 0..3 {
+            shapes(&ctx, &mut stage, Window::Main, Vec::new());
+        }
+        assert_eq!(stage.ink.len(), 1);
+        assert_eq!(stage.ink[0].points.len(), 1);
     }
 
     fn at(page: usize, width: u16) -> Target {

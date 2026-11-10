@@ -118,7 +118,13 @@ pub const BINDINGS: &[Binding] = &[
         keys: &[Key::L],
         alt: true,
         action: Action::Laser,
-        does: "laser pointer: point with the mouse on the current slide",
+        does: "laser pointer: point with the mouse, and drag to draw",
+    },
+    Binding {
+        keys: &[Key::E],
+        alt: true,
+        action: Action::Erase,
+        does: "erase the ink on the current slide",
     },
     Binding {
         keys: &[Key::S],
@@ -263,6 +269,12 @@ mod tests {
     fn the_laser_needs_alt() {
         assert_eq!(action_for(Key::L, ALT), Some(Action::Laser));
         assert_eq!(action_for(Key::L, NONE), Some(Action::Next));
+    }
+
+    #[test]
+    fn erasing_needs_alt() {
+        assert_eq!(action_for(Key::E, ALT), Some(Action::Erase));
+        assert_eq!(action_for(Key::E, NONE), None);
     }
 
     #[test]

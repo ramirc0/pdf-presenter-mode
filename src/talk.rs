@@ -38,8 +38,10 @@ pub enum Action {
     Blank,
     /// Keep the audience on the current slide while the presenter moves on, or let it follow again.
     Freeze,
-    /// Show the mouse on the current slide to the audience as a laser dot, or stop.
+    /// Show the mouse on the current slide to the audience as a laser dot that draws when dragged, or stop.
     Laser,
+    /// Erase the ink on the current slide.
+    Erase,
     /// Start or resume the timer.
     StartTimer,
     /// Pause or resume the timer.
@@ -324,6 +326,8 @@ impl Talk {
             }
             // The window that got the key toggles its own fullscreen.
             Action::Fullscreen => {}
+            // The stage keeps the ink.
+            Action::Erase => {}
             Action::Quit => unreachable!("handled above"),
         }
         Outcome::Continue

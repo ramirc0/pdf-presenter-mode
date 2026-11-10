@@ -8,7 +8,7 @@ A light presenter console for PDF slide decks, with speaker notes and a talk tim
 
 `ppm` shows a PDF fullscreen on the projector and a presenter view on the laptop.
 The presenter view holds the current slide, the next slide, Markdown speaker notes and a status bar with the clock and timers.
-A laser pointer marks a spot on the projected slide with the mouse.
+A laser pointer marks spots on the projected slide and draws on it with the mouse.
 It was built for decks made with [typslides](https://typst.app/universe/package/typslides), but it presents any PDF, one page per slide.
 
 Speaker notes use the [pdfpc](https://pdfpc.github.io) format 2 JSON.
@@ -81,7 +81,8 @@ Keys with Alt held:
 | Keys | Action |
 |---|---|
 | Alt+`f` | freeze the audience on the current slide |
-| Alt+`l` | laser pointer: a red dot on the audience follows the mouse on the current slide |
+| Alt+`l` | laser pointer: a red dot on the audience follows the mouse on the current slide, and a drag draws |
+| Alt+`e` | erase the ink on the current slide |
 | Alt+`s`, Alt+`p`, Alt+`r` | start, pause, or reset the timer |
 | Alt+`+`, Alt+`-` | larger or smaller notes |
 | Alt+`v` | switch between the slides-first and notes-first layouts |
@@ -101,6 +102,12 @@ With the laser on, the status bar shows LASER.
 Point at the presenter's current slide, and a red dot appears at the same spot on both views.
 The audience shows the dot only while it shows that slide, so a blanked or frozen audience stays clean.
 The laser starts off at each launch.
+
+Hold the left button on the current slide to draw with the laser.
+Both views show the ink.
+Each slide keeps its own ink until Alt+`e` erases it.
+Turning the laser off keeps the ink.
+A reload of the deck erases all ink. Ink is not saved.
 
 Drag the lines between the presenter panels to resize them.
 The layout, the panel sizes and the notes size are saved in `~/.local/share/ppm`.
