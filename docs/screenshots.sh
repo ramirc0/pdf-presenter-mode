@@ -6,8 +6,9 @@ set -euo pipefail
 ppm=$(realpath "$1")
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
-# eframe saves settings under XDG_DATA_HOME. Keep the user's out of reach.
-export XDG_DATA_HOME=$work/data
+# eframe saves settings under XDG_DATA_HOME, and ppm keeps its log under XDG_STATE_HOME.
+# Keep the user's out of reach.
+export XDG_DATA_HOME=$work/data XDG_STATE_HOME=$work/state
 # egui's clipboard can fall back to X11. Keep ppm off the user's Xwayland.
 unset DISPLAY
 

@@ -16,6 +16,7 @@ mod stage;
 mod talk;
 mod timer;
 mod watch;
+mod xdg;
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -29,7 +30,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
 use crate::launch::Launch;
-use crate::logging::StderrLog;
 use crate::monitors::{Monitor, Monitors};
 use crate::presenter::{Console, Projector, projector_id};
 use crate::settings::Recent;
@@ -73,11 +73,8 @@ struct Cli {
 /// How often to look for a new or missing monitor.
 const MONITOR_POLL: Duration = Duration::from_secs(1);
 
-static LOG: StderrLog = StderrLog::new();
-
 fn main() -> anyhow::Result<()> {
-    log::set_logger(&LOG)?;
-    log::set_max_level(log::LevelFilter::Warn);
+    logging::install()?;
     let cli = Cli::parse();
     if cli.install_desktop_entry {
         let path = desktop::install()?;
@@ -87,6 +84,7 @@ fn main() -> anyhow::Result<()> {
     if cli.presenter.is_some() && cli.presenter == cli.audience {
         anyhow::bail!("--audience and --presenter name the same monitor");
     }
+    logging::keep_file();
     let talk = match cli.deck {
         Some(deck) => {
             let countdown = cli
@@ -154,7 +152,7 @@ fn main() -> anyhow::Result<()> {
         monitors,
         gui,
     })?;
-    if LOG.failed() {
+    if logging::failed() {
         anyhow::bail!(
             "ppm stopped after the error above. A Nix build outside NixOS needs nixGL for its GL driver: `nixGLIntel ppm DECK`"
         );

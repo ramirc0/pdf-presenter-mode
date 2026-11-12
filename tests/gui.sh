@@ -7,8 +7,9 @@ ppm=$(realpath "$1")
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 failures=0
-# eframe saves settings under XDG_DATA_HOME. Keep the user's out of reach.
-export XDG_DATA_HOME=$work/data
+# eframe saves settings under XDG_DATA_HOME, and ppm keeps its log under XDG_STATE_HOME.
+# Keep the user's out of reach.
+export XDG_DATA_HOME=$work/data XDG_STATE_HOME=$work/state
 # egui's clipboard can fall back to X11. Keep ppm off the user's Xwayland.
 unset DISPLAY
 
@@ -52,6 +53,17 @@ expect() {
   failures=$((failures + 1))
 }
 
+# Reports whether ppm's log file, FILE in its folder, holds TEXT.
+logged() {
+  local name=$1 file=$2 text=$3
+  if grep -qF -- "$text" "$XDG_STATE_HOME/ppm/$file" 2>/dev/null; then
+    echo "ok: $name"
+  else
+    echo "FAIL: $name: no [$text] in $file"
+    failures=$((failures + 1))
+  fi
+}
+
 start_sway 2 $'output HEADLESS-1 mode 1920x1200\noutput HEADLESS-2 mode 1920x1080'
 cargo run --quiet --manifest-path "$root/Cargo.toml" -- "$root/fixtures/basic.pdf" --audience HEADLESS-3 \
   > "$work/ppm.log" 2>&1 &
@@ -62,6 +74,7 @@ wait $! || true
 
 nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-3 >> "$work/ppm.log" 2>&1 &
 expect "no audience while its monitor is missing" "none"
+logged "the log file keeps the warning" ppm.log "monitor HEADLESS-3 is not connected"
 swaymsg create_output >/dev/null
 expect "hotplug opens the audience fullscreen" "HEADLESS-3 fullscreen"
 swaymsg output HEADLESS-3 unplug >/dev/null
@@ -72,6 +85,7 @@ pkill -x -P "$$" ppm; sleep 0.5
 swaymsg focus output HEADLESS-2 >/dev/null
 nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-2 >> "$work/ppm.log" 2>&1 &
 expect "the audience covers the presenter's output" "HEADLESS-2 fullscreen"
+logged "the next run keeps the last log as ppm.log.1" ppm.log.1 "monitor HEADLESS-3 is not connected"
 swaymsg output HEADLESS-2 unplug >/dev/null
 expect "unplug closes an audience that covers the presenter" "none"
 pkill -x -P "$$" ppm; sleep 0.5

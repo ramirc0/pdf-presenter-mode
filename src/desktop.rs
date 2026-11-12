@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
+use crate::xdg;
+
 /// The entry the Nix package installs. Its `Exec` starts `ppm` from the `PATH`.
 const ENTRY: &str = include_str!("../assets/ppm.desktop");
 
@@ -12,17 +14,11 @@ const ENTRY: &str = include_str!("../assets/ppm.desktop");
 ///
 /// # Errors
 ///
-/// Fails if neither `XDG_DATA_HOME` nor `HOME` is set, if this program's path is unknown,
+/// Fails as [`xdg::data_home`] does, if this program's path is unknown,
 /// or if the file cannot be written.
 pub fn install() -> anyhow::Result<PathBuf> {
-    let data = match std::env::var_os("XDG_DATA_HOME").filter(|dir| !dir.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => {
-            PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".local/share")
-        }
-    };
     let program = std::env::current_exe().context("cannot find this program's path")?;
-    install_into(&data, &program)
+    install_into(&xdg::data_home()?, &program)
 }
 
 /// Writes the entry for `program` into the `applications` folder of `data`.
