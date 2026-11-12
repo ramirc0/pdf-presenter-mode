@@ -9,9 +9,12 @@ work=$(mktemp -d)
 failures=0
 # eframe saves settings under XDG_DATA_HOME. Keep the user's out of reach.
 export XDG_DATA_HOME=$work/data
+# egui's clipboard can fall back to X11. Keep ppm off the user's Xwayland.
+unset DISPLAY
 
 cleanup() {
   pkill -x -P "$$" ppm 2>/dev/null || true
+  [ -n "${copier:-}" ] && kill "$copier" 2>/dev/null || true
   [ -n "${SWAYSOCK:-}" ] && swaymsg exit >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -91,6 +94,17 @@ wtype -s 300 "$root/fixtures/basic.pdf"
 wtype -s 100 -P Return -s 50 -p Return
 expect "Enter starts the talk with the presenter where the page was" "HEADLESS-1 fullscreen" presenter
 expect "Enter starts the talk with the audience outside" "$second fullscreen"
+pkill -x -P "$$" ppm; sleep 0.5
+
+# A path copied in another app pastes into the start page.
+nixGLIntel "$ppm" >> "$work/ppm.log" 2>&1 &
+expect "the start page opens again" "none"
+wl-copy --foreground "$root/fixtures/basic.pdf" &
+copier=$!
+wtype -s 300 -M ctrl -P v -s 50 -p v -m ctrl
+wtype -s 100 -P Return -s 50 -p Return
+expect "a pasted path starts the talk" "$second fullscreen"
+kill "$copier"
 pkill -x -P "$$" ppm; sleep 0.5
 
 # Alt+m moves the audience along the monitors, past the presenter's.

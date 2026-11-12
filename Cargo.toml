@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland"] }
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "persistence", "wayland"] }
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"] }
 hayro = "0.9"
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }

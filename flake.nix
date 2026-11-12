@@ -66,6 +66,7 @@
           rustfmt
           sway
           typst
+          wl-clipboard
           wtype
         ];
         buildInputs = runtimeLibs;

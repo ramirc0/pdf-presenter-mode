@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Prints warnings and errors to stderr and remembers whether any error was logged.
+/// Prints warnings and errors to stderr and remembers whether eframe logged an error.
 pub struct StderrLog {
     failed: AtomicBool,
 }
@@ -18,7 +18,8 @@ impl StderrLog {
         }
     }
 
-    /// Whether an error has been logged.
+    /// Whether eframe has logged an error, which is how it reports a failed start.
+    /// Other crates' errors, such as a failed paste in egui-winit, do not count.
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
     }
@@ -35,7 +36,7 @@ impl log::Log for StderrLog {
         if !self.enabled(record.metadata()) {
             return;
         }
-        if record.level() == log::Level::Error {
+        if record.level() == log::Level::Error && record.target().starts_with("eframe") {
             self.failed.store(true, Ordering::Relaxed);
         }
         eprintln!("{}: {}: {}", record.level(), record.target(), record.args());
@@ -50,23 +51,30 @@ mod tests {
 
     use super::*;
 
-    fn record(level: log::Level, log: &StderrLog) {
+    fn record(level: log::Level, target: &str, log: &StderrLog) {
         log.log(
             &log::Record::builder()
                 .level(level)
-                .target("test")
+                .target(target)
                 .args(format_args!("message"))
                 .build(),
         );
     }
 
     #[test]
-    fn an_error_marks_the_run_as_failed() {
+    fn an_error_from_eframe_marks_the_run_as_failed() {
         let log = StderrLog::new();
-        record(log::Level::Warn, &log);
+        record(log::Level::Warn, "eframe::native::run", &log);
         assert!(!log.failed());
-        record(log::Level::Error, &log);
+        record(log::Level::Error, "eframe::native::run", &log);
         assert!(log.failed());
+    }
+
+    #[test]
+    fn an_error_from_another_crate_does_not_fail_the_run() {
+        let log = StderrLog::new();
+        record(log::Level::Error, "egui_winit::clipboard", &log);
+        assert!(!log.failed());
     }
 
     #[test]
