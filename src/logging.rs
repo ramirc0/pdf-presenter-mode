@@ -29,7 +29,8 @@ struct LogFile {
 
 static LOGGER: Logger = Logger::new();
 
-/// Sends `log` records to stderr. Call it before anything logs.
+/// Sends `log` records to stderr, and panics to the log file before the default hook prints them.
+/// Call it before anything logs.
 ///
 /// # Errors
 ///
@@ -37,6 +38,13 @@ static LOGGER: Logger = Logger::new();
 pub fn install() -> anyhow::Result<()> {
     log::set_logger(&LOGGER)?;
     log::set_max_level(log::LevelFilter::Warn);
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed");
+        LOGGER.append(format_args!("PANIC in thread {name}: {info}"));
+        default(info);
+    }));
     Ok(())
 }
 
@@ -94,6 +102,15 @@ impl Logger {
             file: OnceLock::new(),
         }
     }
+
+    /// Writes `line` to the log file after the time, if there is a file.
+    fn append(&self, line: std::fmt::Arguments) {
+        // A poisoned lock only means a write panicked midway. Logging must not panic too.
+        if let Some(mut file) = self.file.get().and_then(|log| log.file.lock().ok()) {
+            let time = jiff::Zoned::now().strftime("%H:%M:%S");
+            let _ = writeln!(file, "{time} {line}");
+        }
+    }
 }
 
 impl log::Log for Logger {
@@ -111,17 +128,12 @@ impl log::Log for Logger {
             self.failed.store(true, Ordering::Relaxed);
         }
         eprintln!("{}: {}: {}", record.level(), record.target(), record.args());
-        // A poisoned lock only means a write panicked midway. Logging must not panic too.
-        if let Some(mut file) = self.file.get().and_then(|log| log.file.lock().ok()) {
-            let time = jiff::Zoned::now().strftime("%H:%M:%S");
-            let _ = writeln!(
-                file,
-                "{time} {}: {}: {}",
-                record.level(),
-                record.target(),
-                record.args()
-            );
-        }
+        self.append(format_args!(
+            "{}: {}: {}",
+            record.level(),
+            record.target(),
+            record.args()
+        ));
     }
 
     fn flush(&self) {}
