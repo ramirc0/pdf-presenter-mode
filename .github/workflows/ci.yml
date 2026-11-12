@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('flake.lock') }}
+      - name: Lint
+        run: nix develop -c just lint
+      - name: Unit tests
+        run: nix develop -c just test
+      - name: GUI tests
+        # The runners have no GPU, so sway draws with pixman and Mesa falls back to software GL.
+        env:
+          WLR_RENDERER: pixman
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          XDG_RUNTIME_DIR=$(mktemp -d)
+          export XDG_RUNTIME_DIR
+          nix develop -c just gui-test
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Build
+        run: nix build -L
+      - name: Validate the desktop entry
+        run: nix shell --inputs-from . nixpkgs#desktop-file-utils -c desktop-file-validate result/share/applications/ppm.desktop
