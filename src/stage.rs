@@ -54,6 +54,9 @@ pub struct Stage {
     laser: Option<egui::Pos2>,
     /// Lines drawn with the laser, oldest first. The last one grows while its drag lasts.
     ink: Vec<Stroke>,
+    /// Whether the projector window is open. While it is closed, a swap waits, so the root
+    /// window keeps the presenter view.
+    projector_open: bool,
     repaint: Repaint,
 }
 
@@ -88,6 +91,7 @@ impl Stage {
             thumbnails: [Vec::new(), Vec::new()],
             laser: None,
             ink: Vec::new(),
+            projector_open: false,
             repaint,
         }
     }
@@ -126,6 +130,14 @@ impl Stage {
 
     /// Stops rendering for `window`, which has closed.
     pub fn close(&mut self, window: Window) {
+        self.forget(window);
+        if window == Window::Projector {
+            self.projector_open = false;
+        }
+    }
+
+    /// Forgets the renders `window` drew in its last frame.
+    fn forget(&mut self, window: Window) {
         self.shown[window as usize].clear();
         self.thumbnails[window as usize].clear();
     }
@@ -142,10 +154,13 @@ impl Stage {
             // A new renderer has no textures, so no page of the old deck can show.
             self.renderer = Renderer::new(ui.ctx().clone(), deck.pdf, self.repaint.clone());
         }
-        self.close(window);
+        self.forget(window);
+        if window == Window::Projector {
+            self.projector_open = true;
+        }
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, egui::Color32::BLACK);
-        match view_of(window, self.talk.swapped()) {
+        match view_of(window, self.talk.swapped() && self.projector_open) {
             View::Audience => {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::None);
                 let slide = self.talk.audience_slide();
@@ -884,6 +899,39 @@ mod tests {
         let wanted = plan(3, shown.iter(), thumbnails.iter());
         assert_eq!(wanted[..2], [at(1, 1920), at(2, 1920)]);
         assert_eq!(wanted[2..], thumbnails);
+    }
+
+    /// Whether `shapes` hold the presenter's status bar.
+    fn shows_presenter(shapes: &[egui::Shape]) -> bool {
+        shapes.iter().any(|shape| {
+            matches!(shape, egui::Shape::Text(text) if text.galley.text().starts_with("slide 1 /"))
+        })
+    }
+
+    #[test]
+    fn with_the_projector_closed_the_root_window_keeps_the_presenter_view() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Swap, Instant::now());
+        assert!(shows_presenter(&shapes(
+            &ctx,
+            &mut stage,
+            Window::Projector,
+            Vec::new()
+        )));
+        assert!(!shows_presenter(&shapes(
+            &ctx,
+            &mut stage,
+            Window::Main,
+            Vec::new()
+        )));
+        stage.close(Window::Projector);
+        assert!(shows_presenter(&shapes(
+            &ctx,
+            &mut stage,
+            Window::Main,
+            Vec::new()
+        )));
     }
 
     #[test]

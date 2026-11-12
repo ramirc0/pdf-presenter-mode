@@ -278,6 +278,8 @@ impl Console {
                     .lock()
                     .expect("stage poisoned")
                     .close(Window::Projector);
+                // This window drew the audience view if swapped. The next frame draws the presenter.
+                ctx.request_repaint();
             }
             return;
         };
