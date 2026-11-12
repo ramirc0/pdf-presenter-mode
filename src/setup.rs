@@ -279,6 +279,9 @@ impl Setup {
                     deck.pages.len(),
                     deck.noted()
                 ));
+                if let Some(why) = &deck.ignored_notes {
+                    ui.colored_label(ui.visuals().error_fg_color, format!("Notes ignored: {why}"));
+                }
             }
             Some(Err(why)) => {
                 ui.colored_label(ui.visuals().error_fg_color, why);
@@ -705,6 +708,20 @@ mod tests {
         let mut setup = opened(&fixture("truncated.pdf"));
         assert!(matches!(&setup.opened, Some(Err(why)) if why.contains("%%EOF")));
         assert!(setup.launch(None).is_none());
+    }
+
+    #[test]
+    fn the_check_names_ignored_notes() {
+        let deck = deck_with_countdown("ignored");
+        std::fs::write(deck.with_extension("pdfpc"), "{broken").unwrap();
+        let ctx = egui::Context::default();
+        let mut setup = opened(deck.to_str().unwrap());
+        let (_, shapes) = frame(&ctx, &mut setup, Vec::new());
+        let ignored = shapes.iter().any(|shape| {
+            matches!(shape, egui::Shape::Text(text) if text.galley.text().starts_with("Notes ignored: "))
+        });
+        assert!(ignored);
+        std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
     }
 
     #[test]

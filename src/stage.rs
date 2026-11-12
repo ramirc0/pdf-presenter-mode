@@ -40,6 +40,9 @@ pub type Repaint = Arc<dyn Fn() + Send + Sync>;
 pub struct Stage {
     pages: Vec<PageSize>,
     notes: Notes,
+    /// Why the notes file of the deck's newest version was ignored, if it was.
+    /// The notes from before stay meanwhile.
+    ignored_notes: Option<String>,
     markdown: CommonMarkCache,
     talk: Talk,
     renderer: Renderer,
@@ -89,6 +92,7 @@ impl Stage {
         Self {
             pages: deck.pages,
             notes: deck.notes,
+            ignored_notes: deck.ignored_notes,
             markdown: CommonMarkCache::default(),
             talk,
             renderer: Renderer::new(ctx, deck.pdf, repaint.clone()),
@@ -168,7 +172,11 @@ impl Stage {
             self.loaded_at = jiff::Zoned::now().time();
             self.talk.reload(deck.pages.len());
             self.pages = deck.pages;
-            self.notes = deck.notes;
+            // A typo in the notes file must not wipe the notes mid-talk.
+            if deck.ignored_notes.is_none() {
+                self.notes = deck.notes;
+            }
+            self.ignored_notes = deck.ignored_notes;
             // The ink marks spots on the old pages, which may have moved.
             self.ink.clear();
             // A new renderer has no textures, so no page of the old deck can show.
@@ -407,6 +415,9 @@ impl Stage {
                 "Not reloaded: {error}. Still showing the version from {}.",
                 self.loaded_at.strftime("%H:%M")
             ));
+        }
+        if let Some(why) = &self.ignored_notes {
+            warnings.push(format!("Notes ignored: {why}."));
         }
         warnings
     }
@@ -930,6 +941,27 @@ mod tests {
         ));
         reload.send(Ok(fixture_deck())).unwrap();
         assert!(!warns(&ctx, &mut stage, Window::Main, "Not reloaded"));
+    }
+
+    #[test]
+    fn a_reload_with_broken_notes_keeps_the_notes_it_had() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        let (reload, reloads) = std::sync::mpsc::channel();
+        stage.reloads = reloads;
+        let mut broken = fixture_deck();
+        broken.notes = Notes::default();
+        broken.ignored_notes = Some("cannot parse talk.pdfpc".into());
+        reload.send(Ok(broken)).unwrap();
+        assert!(warns(
+            &ctx,
+            &mut stage,
+            Window::Main,
+            "Notes ignored: cannot parse talk.pdfpc."
+        ));
+        assert_eq!(stage.notes.on_page(0), Some("Sidecar note."));
+        reload.send(Ok(fixture_deck())).unwrap();
+        assert!(!warns(&ctx, &mut stage, Window::Main, "Notes ignored"));
     }
 
     #[test]

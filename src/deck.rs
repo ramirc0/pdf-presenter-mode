@@ -27,6 +27,8 @@ pub struct Deck {
     pub pages: Vec<PageSize>,
     /// The speaker notes, empty if the deck has none.
     pub notes: Notes,
+    /// Why the notes beside the deck were ignored, if they did not parse.
+    pub ignored_notes: Option<String>,
 }
 
 impl Deck {
@@ -34,7 +36,8 @@ impl Deck {
     ///
     /// The notes come from the pdfpc file `notes` if given. Otherwise they come from an
     /// attached file whose name ends in `.pdfpc`, then from `<deck>.pdfpc` beside the PDF.
-    /// A broken attachment or sidecar only logs a warning, so the talk can go on.
+    /// A broken attachment or sidecar only logs a warning and fills `ignored_notes`,
+    /// so the talk can go on.
     ///
     /// # Errors
     ///
@@ -58,14 +61,15 @@ impl Deck {
                 PageSize { width, height }
             })
             .collect();
-        let notes = match notes {
-            Some(notes) => read_notes(notes)?,
+        let (notes, ignored_notes) = match notes {
+            Some(notes) => (read_notes(notes)?, None),
             None => notes_beside(&pdf, path),
         };
         let deck = Self {
             pdf: Arc::new(pdf),
             pages,
             notes,
+            ignored_notes,
         };
         log::info!(
             "opened {}: {} slides, notes on {}",
@@ -94,25 +98,27 @@ fn read_notes(path: &Path) -> anyhow::Result<Notes> {
     Notes::from_pdfpc(&json).with_context(|| format!("cannot parse {}", path.display()))
 }
 
-/// The attached notes, else the sidecar notes, else none.
-fn notes_beside(pdf: &Pdf, path: &Path) -> Notes {
-    let (source, notes) = match attached_pdfpc(pdf) {
-        Some(json) => (
-            format!("the notes attached to {}", path.display()),
-            Notes::from_pdfpc(&json),
-        ),
+/// The attached notes, else the sidecar notes, else none. Notes that do not parse come back
+/// empty, with the reason.
+fn notes_beside(pdf: &Pdf, path: &Path) -> (Notes, Option<String>) {
+    let notes = match attached_pdfpc(pdf) {
+        Some(json) => Notes::from_pdfpc(&json)
+            .with_context(|| format!("cannot parse the notes attached to {}", path.display())),
         None => {
             let sidecar = sidecar(path);
             if !sidecar.exists() {
-                return Notes::default();
+                return (Notes::default(), None);
             }
-            (sidecar.display().to_string(), read_notes(&sidecar))
+            read_notes(&sidecar)
         }
     };
-    notes.unwrap_or_else(|err| {
-        log::warn!("ignoring {source}: {err:#}");
-        Notes::default()
-    })
+    match notes {
+        Ok(notes) => (notes, None),
+        Err(err) => {
+            log::warn!("ignoring the notes: {err:#}");
+            (Notes::default(), Some(format!("{err:#}")))
+        }
+    }
 }
 
 /// The contents of the first attached file whose name ends in `.pdfpc`.
@@ -206,6 +212,19 @@ mod tests {
         let deck = Deck::open(&fixture("notes.pdf"), Some(&fixture("basic.pdfpc"))).unwrap();
         assert_eq!(deck.notes.on_page(0), Some("Sidecar note."));
         assert_eq!(deck.notes.on_page(1), None);
+    }
+
+    #[test]
+    fn a_broken_sidecar_is_ignored_with_its_reason() {
+        let dir = std::env::temp_dir().join(format!("ppm-deck-broken-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(fixture("basic.pdf"), dir.join("talk.pdf")).unwrap();
+        std::fs::write(dir.join("talk.pdfpc"), "{broken").unwrap();
+        let deck = Deck::open(&dir.join("talk.pdf"), None).unwrap();
+        assert_eq!(deck.notes, Notes::default());
+        let why = deck.ignored_notes.unwrap();
+        assert!(why.contains("talk.pdfpc"), "{why}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
