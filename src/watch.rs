@@ -68,6 +68,7 @@ pub fn watch<T: Send + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -86,6 +87,14 @@ mod tests {
         move || Ok(std::fs::read_to_string(&path)?)
     }
 
+    /// Writes `text` to `path` the way editors and Typst save: whole, then renamed into place.
+    /// A plain write could show the watch an empty file for a moment.
+    fn save(path: &Path, text: &str) {
+        let partial = path.with_extension("partial");
+        std::fs::write(&partial, text).unwrap();
+        std::fs::rename(partial, path).unwrap();
+    }
+
     #[test]
     fn a_change_reopens() {
         let dir = scratch("change");
@@ -93,7 +102,7 @@ mod tests {
         std::fs::write(&file, "one").unwrap();
         let reloads = watch(vec![file.clone()], TICK, read(file.clone()), || {});
         std::thread::sleep(TICK * 3);
-        std::fs::write(&file, "three").unwrap();
+        save(&file, "three");
         assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "three");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -104,7 +113,7 @@ mod tests {
         let sidecar = dir.join("deck.pdfpc");
         let reloads = watch(vec![sidecar.clone()], TICK, read(sidecar.clone()), || {});
         std::thread::sleep(TICK * 3);
-        std::fs::write(&sidecar, "notes").unwrap();
+        save(&sidecar, "notes");
         assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "notes");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -126,7 +135,7 @@ mod tests {
         };
         let reloads = watch(vec![file.clone()], TICK, open, || {});
         std::thread::sleep(TICK * 3);
-        std::fs::write(&file, "two").unwrap();
+        save(&file, "two");
         assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "whole");
         assert_eq!(attempts.load(Ordering::Relaxed), 4);
         std::fs::remove_dir_all(dir).unwrap();
