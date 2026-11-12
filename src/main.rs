@@ -6,6 +6,7 @@ mod desktop;
 mod fonts;
 mod keys;
 mod launch;
+mod links;
 mod logging;
 mod monitors;
 mod pdfpc;

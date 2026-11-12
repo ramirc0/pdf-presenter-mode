@@ -18,7 +18,7 @@ pub enum Action {
     Up,
     /// Open or close the overview of all slides.
     Overview,
-    /// Go to this slide, picked with the mouse in the overview.
+    /// Go to this slide, picked with the mouse in the overview or through a link.
     Pick(usize),
     /// Go to the first slide.
     First,

@@ -8,6 +8,7 @@ use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::dict::keys::{EF, EMBEDDED_FILES, F, KIDS, NAMES};
 use hayro::hayro_syntax::object::{Array, Dict, Stream};
 
+use crate::links::{Link, links_of};
 use crate::pdfpc::Notes;
 
 /// The size of a page in PDF points, after its rotation.
@@ -25,6 +26,8 @@ pub struct Deck {
     pub pdf: Arc<Pdf>,
     /// One entry per page, in page order.
     pub pages: Vec<PageSize>,
+    /// The links on each page, in page order.
+    pub links: Vec<Vec<Link>>,
     /// The speaker notes, empty if the deck has none.
     pub notes: Notes,
     /// Why the notes beside the deck were ignored, if they did not parse.
@@ -66,6 +69,7 @@ impl Deck {
             None => notes_beside(&pdf, path),
         };
         let deck = Self {
+            links: links_of(&pdf),
             pdf: Arc::new(pdf),
             pages,
             notes,

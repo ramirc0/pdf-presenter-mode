@@ -8,6 +8,7 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::deck::{Deck, PageSize};
+use crate::links::{Destination, Link};
 use crate::pdfpc::Notes;
 use crate::render::{Placement, Renderer, Target, place};
 use crate::settings::{Layout, Settings};
@@ -39,6 +40,8 @@ pub type Repaint = Arc<dyn Fn() + Send + Sync>;
 /// Shared state of both windows.
 pub struct Stage {
     pages: Vec<PageSize>,
+    /// The links on each page.
+    links: Vec<Vec<Link>>,
     notes: Notes,
     /// Why the notes file of the deck's newest version was ignored, if it was.
     /// The notes from before stay meanwhile.
@@ -93,6 +96,7 @@ impl Stage {
         let talk = Talk::new(deck.pages.len(), settings);
         Self {
             pages: deck.pages,
+            links: deck.links,
             notes: deck.notes,
             ignored_notes: deck.ignored_notes,
             markdown: CommonMarkCache::default(),
@@ -181,6 +185,7 @@ impl Stage {
             self.loaded_at = jiff::Zoned::now().time();
             self.talk.reload(deck.pages.len());
             self.pages = deck.pages;
+            self.links = deck.links;
             // A typo in the notes file must not wipe the notes mid-talk.
             if deck.ignored_notes.is_none() {
                 self.notes = deck.notes;
@@ -262,6 +267,7 @@ impl Stage {
         self.aim(ui, shown);
         self.scribble(ui, shown);
         self.show_laser(ui, shown);
+        self.follow_links(ui, shown);
         self.show_slide(ui, window, self.talk.next_slide(), next);
         self.show_notes(ui, notes);
     }
@@ -360,6 +366,38 @@ impl Stage {
         // Each repaint runs this again, so a repaint for a button held still would never stop.
         if stroke.points.last() != Some(&at) {
             stroke.points.push(at);
+            (self.repaint)();
+        }
+    }
+
+    /// While the laser is off, makes the links on `slide`, the current slide's rect, clickable.
+    /// A link to a slide goes there.
+    fn follow_links(&mut self, ui: &egui::Ui, slide: Option<egui::Rect>) {
+        let Some(rect) = slide.filter(|_| !self.talk.laser()) else {
+            return;
+        };
+        let mut picked = None;
+        let links = self.links.get(self.talk.slide()).into_iter().flatten();
+        for (index, link) in links.enumerate() {
+            let corner = |x: f64, y: f64| rect.lerp_inside(egui::vec2(x as f32, y as f32));
+            let area = egui::Rect::from_min_max(
+                corner(link.area.x0, link.area.y0),
+                corner(link.area.x1, link.area.y1),
+            );
+            let response = ui
+                .interact(area, link_id(index), egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            match link.to {
+                Destination::Slide(slide) => {
+                    let response = response.on_hover_text(format!("slide {}", slide + 1));
+                    if response.clicked() {
+                        picked = Some(slide);
+                    }
+                }
+            }
+        }
+        if let Some(slide) = picked {
+            self.talk.apply(Action::Pick(slide), Instant::now());
             (self.repaint)();
         }
     }
@@ -618,6 +656,11 @@ fn split(
     }
 }
 
+/// The widget id of the link at `index` on the current slide.
+fn link_id(index: usize) -> egui::Id {
+    egui::Id::unique("link").with(index)
+}
+
 /// Scales every text style of `style` by `factor`.
 pub fn enlarge_text(style: &mut egui::Style, factor: f32) {
     for font in style.text_styles.values_mut() {
@@ -715,6 +758,28 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// A stage presenting `fixtures/links.pdf`, whose first slide links to the other two.
+    fn links_stage(ctx: &egui::Context) -> Stage {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/links.pdf");
+        let (_, reloads) = std::sync::mpsc::channel();
+        Stage::new(
+            Deck::open(&path, None).unwrap(),
+            Settings::default(),
+            reloads,
+            ctx.clone(),
+            Arc::new(|| {}),
+        )
+    }
+
+    /// A click with the left button at `pos`.
+    fn click(pos: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            left_button(pos, true),
+            left_button(pos, false),
+        ]
     }
 
     /// A stage presenting the fixture deck, with textures going to `ctx`.
@@ -1176,6 +1241,29 @@ mod tests {
             Window::Main,
             Vec::new()
         )));
+    }
+
+    #[test]
+    fn a_click_on_a_link_goes_to_its_slide() {
+        let ctx = egui::Context::default();
+        let mut stage = links_stage(&ctx);
+        // egui hit-tests a press against the previous frame, so draw one first.
+        shapes(&ctx, &mut stage, Window::Main, Vec::new());
+        let link = ctx.read_response(link_id(0)).unwrap().rect.center();
+        shapes(&ctx, &mut stage, Window::Main, click(link));
+        assert_eq!(stage.talk.slide(), 2);
+    }
+
+    #[test]
+    fn links_do_nothing_while_the_laser_is_on() {
+        let ctx = egui::Context::default();
+        let mut stage = links_stage(&ctx);
+        shapes(&ctx, &mut stage, Window::Main, Vec::new());
+        let link = ctx.read_response(link_id(0)).unwrap().rect.center();
+        stage.talk.apply(Action::Laser, Instant::now());
+        shapes(&ctx, &mut stage, Window::Main, Vec::new());
+        shapes(&ctx, &mut stage, Window::Main, click(link));
+        assert_eq!(stage.talk.slide(), 0);
     }
 
     #[test]
