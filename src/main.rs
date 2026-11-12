@@ -1,5 +1,6 @@
 //! `ppm`: a presenter console for PDF slide decks.
 
+mod awake;
 mod deck;
 mod desktop;
 mod fonts;
@@ -152,7 +153,7 @@ fn main() -> anyhow::Result<()> {
                 gui.get_or_init(|| cc.egui_ctx.clone());
                 let mut console = Console::new(monitors, Recent::load(cc.storage), page);
                 if let Some((launch, deck)) = talk {
-                    console.start(launch, deck, &cc.egui_ctx, cc.storage);
+                    console.start(launch, deck, &cc.egui_ctx, cc.storage, cc);
                 }
                 Ok(Box::new(console))
             }

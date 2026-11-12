@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use crate::awake::Awake;
 use crate::deck::Deck;
 use crate::launch::Launch;
 use crate::monitors::{Monitors, audience_monitor, names_of, next_audience_monitor};
@@ -74,7 +76,11 @@ enum Phase {
     /// The start page, until it starts the talk.
     Setup(Box<Setup>),
     /// The talk, shared with the projector window.
-    Talk(Arc<Mutex<Stage>>),
+    Talk {
+        stage: Arc<Mutex<Stage>>,
+        /// Keeps the screen awake until ppm exits, if the compositor can.
+        _awake: Option<Awake>,
+    },
 }
 
 /// Where the two windows go. Both windows share it, because a covered window stops running
@@ -184,13 +190,15 @@ impl Console {
     }
 
     /// Starts the talk `launch` describes, on its opened `deck`, with textures going to `ctx`
-    /// and the presenter preferences from `storage`.
+    /// and the presenter preferences from `storage`. From now on the screen stays awake while
+    /// `window`, the root window, shows.
     pub fn start(
         &mut self,
         launch: Launch,
         deck: Deck,
         ctx: &egui::Context,
         storage: Option<&dyn eframe::Storage>,
+        window: &(impl HasWindowHandle + HasDisplayHandle),
     ) {
         let repaint: Repaint = Arc::new({
             let ctx = ctx.clone();
@@ -217,7 +225,14 @@ impl Console {
         placement.projector = launch.audience;
         placement.presenter = launch.presenter;
         drop(placement);
-        self.phase = Phase::Talk(Arc::new(Mutex::new(stage)));
+        let awake = Awake::keep(window)
+            .inspect(|_| log::info!("the screen stays awake during the talk"))
+            .inspect_err(|err| log::warn!("cannot keep the screen awake: {err:#}"))
+            .ok();
+        self.phase = Phase::Talk {
+            stage: Arc::new(Mutex::new(stage)),
+            _awake: awake,
+        };
     }
 
     /// Logs each requested monitor that is not connected, once per monitor list.
@@ -345,12 +360,12 @@ impl eframe::App for Console {
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
                 }
                 if let Some((launch, deck)) = setup.show(ui, &list, here.as_deref(), &self.recent) {
-                    self.start(launch, deck, ui.ctx(), frame.storage());
+                    self.start(launch, deck, ui.ctx(), frame.storage(), frame);
                     ui.ctx().request_repaint();
                 }
                 return;
             }
-            Phase::Talk(stage) => stage.clone(),
+            Phase::Talk { stage, .. } => stage.clone(),
         };
         let names = names_of(&list);
         self.report_missing(&names);
@@ -376,7 +391,7 @@ impl eframe::App for Console {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.recent.save(storage);
-        if let Phase::Talk(stage) = &self.phase {
+        if let Phase::Talk { stage, .. } = &self.phase {
             stage
                 .lock()
                 .expect("stage poisoned")

@@ -41,6 +41,12 @@ presenter() {
       | "\($o.name)\(if .fullscreen_mode == 1 then " fullscreen" else "" end)"] | join(", ")'
 }
 
+# Prints whether ppm asks to keep the screen awake through its root window: "enabled" or "none".
+inhibitor() {
+  swaymsg -t get_tree -r | jq -r '[.. | objects | select(.app_id? == "ppm" and .name == "ppm")
+      | .idle_inhibitors.application] | join(", ")'
+}
+
 # Waits up to 5 s for PROBE, by default the audience's place, to print WANT, then reports.
 expect() {
   local name=$1 want=$2 probe=${3:-windows} got=""
@@ -104,10 +110,12 @@ swaymsg focus output HEADLESS-1 >/dev/null
 nixGLIntel "$ppm" >> "$work/ppm.log" 2>&1 &
 expect "the start page opens without an audience" "none"
 expect "the start page is a normal window" "HEADLESS-1" presenter
+expect "the start page lets the screen sleep" "none" inhibitor
 wtype -s 300 "$root/fixtures/basic.pdf"
 wtype -s 100 -P Return -s 50 -p Return
 expect "Enter starts the talk with the presenter where the page was" "HEADLESS-1 fullscreen" presenter
 expect "Enter starts the talk with the audience outside" "$second fullscreen"
+expect "the talk keeps the screen awake" "enabled" inhibitor
 pkill -x -P "$$" ppm; sleep 0.5
 
 # A path copied in another app pastes into the start page.
