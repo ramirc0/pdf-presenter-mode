@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use hayro::hayro_interpret::util::{RectExt as _, TransformExt as _};
 use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::object::dict::keys::{
-    A, ANNOTS, D, DEST, DESTS, F, KIDS, NAMES, RECT, S, SUBTYPE,
+    A, ANNOTS, D, DEST, DESTS, F, KIDS, NAMES, RECT, S, SUBTYPE, URI,
 };
 use hayro::hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, ObjectIdentifier, Rect};
 use hayro::hayro_syntax::page::Page;
@@ -18,6 +18,8 @@ use hayro::kurbo;
 pub enum Destination {
     /// The slide at this index, counting from 0.
     Slide(usize),
+    /// A URI, such as a web page. ppm opens only some, see [`browsable`].
+    Web(String),
 }
 
 /// A link on a page.
@@ -102,8 +104,29 @@ fn destination(
     let action = annot.get::<Dict>(A)?;
     match &*action.get::<Name>(S)? {
         b"GoTo" => slide_of(action.get::<Object>(D)?, pages, catalog).map(Destination::Slide),
+        b"URI" => {
+            let uri = action.get::<hayro::hayro_syntax::object::String>(URI)?;
+            Some(Destination::Web(
+                String::from_utf8_lossy(uri.as_bytes()).into_owned(),
+            ))
+        }
         _ => None,
     }
+}
+
+/// The address to open for the link target `uri`, if ppm opens it: `http`, `https` and `mailto`
+/// links, and addresses that start with `www.`, which get `https://`. Other schemes, such as
+/// `file:` or an app's own, could start any program, so they stay closed.
+pub fn browsable(uri: &str) -> Option<String> {
+    let uri = uri.trim();
+    if uri.starts_with("www.") {
+        return Some(format!("https://{uri}"));
+    }
+    let (scheme, rest) = uri.split_once(':')?;
+    let opens = ["http", "https", "mailto"]
+        .iter()
+        .any(|open| scheme.eq_ignore_ascii_case(open));
+    (opens && !rest.is_empty()).then(|| uri.to_owned())
 }
 
 /// The slide a destination names: an array that starts with the page, or a string naming such
@@ -191,7 +214,16 @@ mod tests {
         let links = links_of(&fixture("links.pdf"));
         assert_eq!(links.len(), 3);
         let first: Vec<&Destination> = links[0].iter().map(|link| &link.to).collect();
-        assert_eq!(first, [&Destination::Slide(2), &Destination::Slide(1)]);
+        assert_eq!(
+            first,
+            [
+                &Destination::Slide(2),
+                &Destination::Slide(1),
+                &Destination::Web("https://typst.app".into()),
+                &Destination::Web("www.example.com".into()),
+                &Destination::Web("file:///etc/hostname".into()),
+            ]
+        );
         for link in &links[0] {
             let area = link.area;
             assert!(
@@ -205,6 +237,34 @@ mod tests {
         }
         assert!(links[0][0].area.y1 <= links[0][1].area.y0);
         assert!(links[1].is_empty() && links[2].is_empty());
+    }
+
+    #[test]
+    fn only_web_and_mail_links_open() {
+        assert_eq!(
+            browsable("https://typst.app").as_deref(),
+            Some("https://typst.app")
+        );
+        assert_eq!(
+            browsable("HTTP://example.com").as_deref(),
+            Some("HTTP://example.com")
+        );
+        assert_eq!(
+            browsable("mailto:me@example.com").as_deref(),
+            Some("mailto:me@example.com")
+        );
+        assert_eq!(
+            browsable("www.example.com").as_deref(),
+            Some("https://www.example.com")
+        );
+        for closed in [
+            "file:///etc/hostname",
+            "javascript:alert(1)",
+            "example.com",
+            "https:",
+        ] {
+            assert_eq!(browsable(closed), None, "{closed}");
+        }
     }
 
     #[test]

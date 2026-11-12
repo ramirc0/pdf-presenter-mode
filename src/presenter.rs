@@ -9,6 +9,7 @@ use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use crate::awake::Awake;
 use crate::deck::Deck;
 use crate::launch::Launch;
+use crate::links::browsable;
 use crate::monitors::{Monitors, audience_monitor, names_of, next_audience_monitor};
 use crate::settings::{Recent, Settings};
 use crate::setup::Setup;
@@ -147,6 +148,73 @@ impl Placement {
         self.shown_on = Some(names[next].clone());
         Some(next)
     }
+}
+
+/// Variables both nixGL wrappers set to Nix's Mesa. A browser from the system must not load it.
+const NIXGL: [&str; 5] = [
+    "LD_LIBRARY_PATH",
+    "LIBGL_DRIVERS_PATH",
+    "LIBVA_DRIVERS_PATH",
+    "__EGL_VENDOR_LIBRARY_FILENAMES",
+    "GBM_BACKENDS_PATH",
+];
+
+/// Takes the URLs egui was asked to open this frame, from a link on a slide or in the notes,
+/// out of its output, and returns those ppm opens (see [`browsable`]).
+/// eframe would only log that its `links` feature is off.
+fn take_urls(ctx: &egui::Context) -> Vec<String> {
+    let asked = ctx.output_mut(|output| {
+        let mut asked = Vec::new();
+        output.commands.retain(|command| match command {
+            egui::OutputCommand::OpenUrl(open) => {
+                asked.push(open.url.clone());
+                false
+            }
+            _ => true,
+        });
+        asked
+    });
+    asked
+        .into_iter()
+        .filter_map(|url| {
+            let opens = browsable(&url);
+            if opens.is_none() {
+                log::warn!("not opening {url}: ppm opens only web and mail links");
+            }
+            opens
+        })
+        .collect()
+}
+
+/// Opens the URLs asked for in `ui`'s window in the default browser, and says so in `stage`'s status bar.
+fn open_urls(ui: &egui::Ui, stage: &mut Stage) {
+    for url in take_urls(ui.ctx()) {
+        log::info!("opening {url}");
+        stage.notice(format!("opened {url}"));
+        let mut command = xdg_open(&url);
+        // A thread waits for it, so it leaves no zombie behind.
+        let waited =
+            std::thread::Builder::new()
+                .name("xdg-open".into())
+                .spawn(move || match command.status() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => log::warn!("xdg-open {url} failed: {status}"),
+                    Err(err) => log::warn!("cannot run xdg-open: {err}"),
+                });
+        if let Err(err) = waited {
+            log::warn!("cannot start xdg-open: {err}");
+        }
+    }
+}
+
+/// The command that opens `url` in the default browser, without nixGL's variables.
+fn xdg_open(url: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(url);
+    for variable in NIXGL {
+        command.env_remove(variable);
+    }
+    command
 }
 
 /// Applies the keys pressed in `ui`'s window to `stage`, then quits or moves the audience
@@ -342,6 +410,7 @@ impl Console {
             let mut stage = stage.lock().expect("stage poisoned");
             handle_keys(ui, &mut stage, &placement, &names);
             stage.draw(ui, Window::Projector, audience.as_deref(), &missing);
+            open_urls(ui, &mut stage);
         });
     }
 }
@@ -385,6 +454,7 @@ impl eframe::App for Console {
             let mut stage = stage.lock().expect("stage poisoned");
             handle_keys(ui, &mut stage, &self.placement, &names);
             stage.draw(ui, Window::Main, audience.as_deref(), &missing);
+            open_urls(ui, &mut stage);
         }
         self.show_projector(ui.ctx(), &stage, &names);
     }
@@ -404,6 +474,43 @@ impl eframe::App for Console {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_browsable_urls_are_taken_out_to_open() {
+        let ctx = egui::Context::default();
+        let mut taken = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx()
+                .open_url(egui::OpenUrl::new_tab("file:///etc/hostname"));
+            ui.ctx()
+                .open_url(egui::OpenUrl::new_tab("https://typst.app"));
+            ui.ctx().copy_text("a warning".into());
+            taken = take_urls(ui.ctx());
+        });
+        output.textures_delta.clear();
+        assert_eq!(taken, ["https://typst.app"]);
+        // egui-winit gets no URL, only the other commands.
+        assert_eq!(
+            output.platform_output.commands,
+            [egui::OutputCommand::CopyText("a warning".into())]
+        );
+    }
+
+    #[test]
+    fn the_browser_does_not_inherit_nixgl() {
+        let command = xdg_open("https://typst.app");
+        let removed: Vec<&std::ffi::OsStr> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name)
+            .collect();
+        for variable in NIXGL {
+            assert!(
+                removed.contains(&std::ffi::OsStr::new(variable)),
+                "{variable}"
+            );
+        }
+    }
 
     #[test]
     fn missing_names_each_requested_monitor_that_is_not_connected() {

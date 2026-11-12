@@ -8,7 +8,7 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::deck::{Deck, PageSize};
-use crate::links::{Destination, Link};
+use crate::links::{Destination, Link, browsable};
 use crate::pdfpc::Notes;
 use crate::render::{Placement, Renderer, Target, place};
 use crate::settings::{Layout, Settings};
@@ -371,7 +371,7 @@ impl Stage {
     }
 
     /// While the laser is off, makes the links on `slide`, the current slide's rect, clickable.
-    /// A link to a slide goes there.
+    /// A link to a slide goes there. A web link asks egui to open it, which `presenter.rs` does.
     fn follow_links(&mut self, ui: &egui::Ui, slide: Option<egui::Rect>) {
         let Some(rect) = slide.filter(|_| !self.talk.laser()) else {
             return;
@@ -384,16 +384,30 @@ impl Stage {
                 corner(link.area.x0, link.area.y0),
                 corner(link.area.x1, link.area.y1),
             );
-            let response = ui
-                .interact(area, link_id(index), egui::Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            match link.to {
+            let response = ui.interact(area, link_id(index), egui::Sense::click());
+            let hand = egui::CursorIcon::PointingHand;
+            match &link.to {
                 Destination::Slide(slide) => {
-                    let response = response.on_hover_text(format!("slide {}", slide + 1));
+                    let response = response
+                        .on_hover_cursor(hand)
+                        .on_hover_text(format!("slide {}", slide + 1));
                     if response.clicked() {
-                        picked = Some(slide);
+                        picked = Some(*slide);
                     }
                 }
+                Destination::Web(uri) => match browsable(uri) {
+                    Some(url) => {
+                        let response = response.on_hover_cursor(hand).on_hover_text(&url);
+                        if response.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        }
+                    }
+                    None => {
+                        response.on_hover_text(format!(
+                            "{uri}, not opened: ppm opens only web and mail links"
+                        ));
+                    }
+                },
             }
         }
         if let Some(slide) = picked {
@@ -505,8 +519,13 @@ impl Stage {
         }
         if let Some(text) = copied {
             ui.ctx().copy_text(text);
-            self.notice = Some((String::from("copied"), Instant::now()));
+            self.notice(String::from("copied"));
         }
+    }
+
+    /// Shows `text` at the end of the status bar for a moment.
+    pub fn notice(&mut self, text: String) {
+        self.notice = Some((text, Instant::now()));
     }
 
     fn show_status(&self, ui: &mut egui::Ui, audience: Option<&str>) {
@@ -1252,6 +1271,41 @@ mod tests {
         let link = ctx.read_response(link_id(0)).unwrap().rect.center();
         shapes(&ctx, &mut stage, Window::Main, click(link));
         assert_eq!(stage.talk.slide(), 2);
+    }
+
+    /// Whether a click on the link at `index` asks egui to open `url`.
+    fn opens(index: usize, url: &str) -> bool {
+        let ctx = egui::Context::default();
+        let mut stage = links_stage(&ctx);
+        shapes(&ctx, &mut stage, Window::Main, Vec::new());
+        let link = ctx.read_response(link_id(index)).unwrap().rect.center();
+        let output = run(&ctx, &mut stage, Window::Main, click(link));
+        output
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::OutputCommand::OpenUrl(open) if open.url == url))
+    }
+
+    #[test]
+    fn a_click_on_a_web_link_asks_to_open_it() {
+        assert!(opens(2, "https://typst.app"));
+        assert!(opens(3, "https://www.example.com"));
+    }
+
+    #[test]
+    fn a_click_on_a_file_link_opens_nothing() {
+        let ctx = egui::Context::default();
+        let mut stage = links_stage(&ctx);
+        shapes(&ctx, &mut stage, Window::Main, Vec::new());
+        let link = ctx.read_response(link_id(4)).unwrap().rect.center();
+        let output = run(&ctx, &mut stage, Window::Main, click(link));
+        let asked = output
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::OutputCommand::OpenUrl(_)));
+        assert!(!asked);
     }
 
     #[test]
