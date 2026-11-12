@@ -74,7 +74,7 @@ wait $! || true
 
 nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-3 >> "$work/ppm.log" 2>&1 &
 expect "no audience while its monitor is missing" "none"
-logged "the log file keeps the warning" ppm.log "monitor HEADLESS-3 is not connected"
+logged "the log file keeps the warning" ppm.log "Monitor HEADLESS-3 is not connected"
 swaymsg create_output >/dev/null
 expect "hotplug opens the audience fullscreen" "HEADLESS-3 fullscreen"
 swaymsg output HEADLESS-3 unplug >/dev/null
@@ -85,7 +85,7 @@ pkill -x -P "$$" ppm; sleep 0.5
 swaymsg focus output HEADLESS-2 >/dev/null
 nixGLIntel "$ppm" "$root/fixtures/basic.pdf" --audience HEADLESS-2 >> "$work/ppm.log" 2>&1 &
 expect "the audience covers the presenter's output" "HEADLESS-2 fullscreen"
-logged "the next run keeps the last log as ppm.log.1" ppm.log.1 "monitor HEADLESS-3 is not connected"
+logged "the next run keeps the last log as ppm.log.1" ppm.log.1 "Monitor HEADLESS-3 is not connected"
 swaymsg output HEADLESS-2 unplug >/dev/null
 expect "unplug closes an audience that covers the presenter" "none"
 pkill -x -P "$$" ppm; sleep 0.5

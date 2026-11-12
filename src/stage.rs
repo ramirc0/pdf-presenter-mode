@@ -155,9 +155,15 @@ impl Stage {
         self.thumbnails[window as usize].clear();
     }
 
-    /// Draws `window`'s view into `ui`.
-    /// The presenter view's status bar names `audience`, the monitor the audience is on.
-    pub fn draw(&mut self, ui: &mut egui::Ui, window: Window, audience: Option<&str>) {
+    /// Draws `window`'s view into `ui`. The presenter view's status bar names `audience`,
+    /// the monitor the audience is on, and warns about the `missing` monitors.
+    pub fn draw(
+        &mut self,
+        ui: &mut egui::Ui,
+        window: Window,
+        audience: Option<&str>,
+        missing: &[String],
+    ) {
         let mut newest = None;
         for reload in self.reloads.try_iter() {
             match reload {
@@ -198,7 +204,7 @@ impl Stage {
                     self.show_laser(ui, shown);
                 }
             }
-            View::Presenter => self.draw_presenter(ui, window, audience),
+            View::Presenter => self.draw_presenter(ui, window, audience, missing),
         }
         let wanted = plan(
             self.pages.len(),
@@ -208,12 +214,18 @@ impl Stage {
         self.renderer.request(wanted);
     }
 
-    fn draw_presenter(&mut self, ui: &mut egui::Ui, window: Window, audience: Option<&str>) {
+    fn draw_presenter(
+        &mut self,
+        ui: &mut egui::Ui,
+        window: Window,
+        audience: Option<&str>,
+        missing: &[String],
+    ) {
         egui::Panel::bottom("status")
             .frame(egui::Frame::NONE.inner_margin(8))
             .show(ui, |ui| {
                 enlarge_text(ui.style_mut(), 1.4);
-                self.show_warnings(ui, window);
+                self.show_warnings(ui, window, missing);
                 self.show_status(ui, audience);
             });
         let body = ui.available_rect_before_wrap();
@@ -407,8 +419,8 @@ impl Stage {
         });
     }
 
-    /// What the speaker should know is wrong, most pressing first.
-    fn warnings(&self) -> Vec<String> {
+    /// What the speaker should know is wrong, most pressing first, ending with the `missing` monitors.
+    fn warnings(&self, missing: &[String]) -> Vec<String> {
         let mut warnings = Vec::new();
         if let Some(error) = &self.reload_error {
             warnings.push(format!(
@@ -419,13 +431,14 @@ impl Stage {
         if let Some(why) = &self.ignored_notes {
             warnings.push(format!("Notes ignored: {why}."));
         }
+        warnings.extend_from_slice(missing);
         warnings
     }
 
     /// The warnings in red, then where the log file is. A change in their number reruns the
     /// pass, since egui sizes the panel from its last frame.
-    fn show_warnings(&mut self, ui: &mut egui::Ui, window: Window) {
-        let warnings = self.warnings();
+    fn show_warnings(&mut self, ui: &mut egui::Ui, window: Window, missing: &[String]) {
+        let warnings = self.warnings(missing);
         let shown = &mut self.warnings_shown[window as usize];
         if *shown != warnings.len() {
             *shown = warnings.len();
@@ -697,7 +710,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             stage.handle_keys(ui);
-            stage.draw(ui, window, None);
+            stage.draw(ui, window, None, &[]);
         });
         output.textures_delta.clear();
         output
@@ -962,6 +975,21 @@ mod tests {
         assert_eq!(stage.notes.on_page(0), Some("Sidecar note."));
         reload.send(Ok(fixture_deck())).unwrap();
         assert!(!warns(&ctx, &mut stage, Window::Main, "Notes ignored"));
+    }
+
+    #[test]
+    fn missing_monitors_warn_in_the_presenter_view() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        let missing = ["Monitor DP-6 is not connected.".to_string()];
+        let input = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| stage.draw(ui, Window::Main, None, &missing));
+        output.textures_delta.clear();
+        let shapes: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+        assert!(texts(&shapes).contains(&"! Monitor DP-6 is not connected.".to_string()));
     }
 
     #[test]

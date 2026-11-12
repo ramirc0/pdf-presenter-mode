@@ -98,6 +98,33 @@ impl Placement {
         }
     }
 
+    /// One line for each monitor asked for by name that is not among `names`, saying what
+    /// happens without it.
+    fn missing(&self, names: &[String]) -> Vec<String> {
+        let connected: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !name.is_empty())
+            .collect();
+        let requested = [
+            (self.projector.requested(), "there is no audience window"),
+            (
+                self.presenter.as_deref(),
+                "the presenter stays a normal window",
+            ),
+        ];
+        requested
+            .into_iter()
+            .filter_map(|(monitor, so)| {
+                let monitor = monitor.filter(|monitor| !connected.contains(monitor))?;
+                Some(format!(
+                    "Monitor {monitor} is not connected, so {so}. Connected: {}.",
+                    connected.join(", ")
+                ))
+            })
+            .collect()
+    }
+
     /// Sends a fullscreen audience to the next monitor among `names` that the presenter is
     /// not on, and returns its index. From then on the audience asks for that monitor by name.
     fn move_audience(&mut self, names: &[String]) -> Option<usize> {
@@ -193,32 +220,16 @@ impl Console {
         self.phase = Phase::Talk(Arc::new(Mutex::new(stage)));
     }
 
-    /// Warns about each requested monitor that is not connected, once per monitor list.
+    /// Logs each requested monitor that is not connected, once per monitor list.
     fn report_missing(&mut self, names: &[String]) {
         if names == self.checked {
             return;
         }
         let placement = self.placement.lock().expect("placement poisoned");
-        let missing = [
-            (
-                placement.projector.requested(),
-                "there is no audience window",
-            ),
-            (
-                placement.presenter.as_deref(),
-                "the presenter stays a normal window",
-            ),
-        ];
-        for (monitor, so) in missing {
-            if let Some(monitor) = monitor
-                && !names.iter().any(|name| name == monitor)
-            {
-                log::warn!(
-                    "monitor {monitor} is not connected, so {so}. Connected: {}",
-                    names.join(", ")
-                );
-            }
+        for line in placement.missing(names) {
+            log::warn!("{line}");
         }
+        drop(placement);
         self.checked = names.to_vec();
     }
 
@@ -296,12 +307,16 @@ impl Console {
             // Wayland window gets no frame callbacks, so the presenter's ui, which closes this
             // window, stops running. Leaving fullscreen uncovers it.
             let names = names_of(&monitors.lock().expect("monitor list poisoned"));
-            let (has_place, audience) = {
+            let (has_place, audience, missing) = {
                 let placement = placement.lock().expect("placement poisoned");
                 let has_place = placement
                     .projector
                     .has_place(&names, placement.presenter.as_deref());
-                (has_place, placement.audience_monitor().map(String::from))
+                (
+                    has_place,
+                    placement.audience_monitor().map(String::from),
+                    placement.missing(&names),
+                )
             };
             if !has_place {
                 ui.ctx()
@@ -311,7 +326,7 @@ impl Console {
             }
             let mut stage = stage.lock().expect("stage poisoned");
             handle_keys(ui, &mut stage, &placement, &names);
-            stage.draw(ui, Window::Projector, audience.as_deref());
+            stage.draw(ui, Window::Projector, audience.as_deref(), &missing);
         });
     }
 }
@@ -340,18 +355,21 @@ impl eframe::App for Console {
         let names = names_of(&list);
         self.report_missing(&names);
         self.place_presenter(ui.ctx(), &names);
-        let audience = {
+        let (audience, missing) = {
             let mut placement = self.placement.lock().expect("placement poisoned");
             placement.presenter_at = frame
                 .winit_window()
                 .and_then(|window| window.current_monitor())
                 .and_then(|monitor| monitor.name());
-            placement.audience_monitor().map(String::from)
+            (
+                placement.audience_monitor().map(String::from),
+                placement.missing(&names),
+            )
         };
         {
             let mut stage = stage.lock().expect("stage poisoned");
             handle_keys(ui, &mut stage, &self.placement, &names);
-            stage.draw(ui, Window::Main, audience.as_deref());
+            stage.draw(ui, Window::Main, audience.as_deref(), &missing);
         }
         self.show_projector(ui.ctx(), &stage, &names);
     }
@@ -365,5 +383,35 @@ impl eframe::App for Console {
                 .settings()
                 .save(storage);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_names_each_requested_monitor_that_is_not_connected() {
+        let placement = Placement {
+            projector: Projector::Monitor {
+                requested: Some("DP-6".into()),
+            },
+            presenter: Some("eDP-1".into()),
+            shown_on: None,
+            presenter_at: None,
+        };
+        let names = ["HDMI-A-1".to_string(), String::new()];
+        assert_eq!(
+            placement.missing(&names),
+            [
+                "Monitor DP-6 is not connected, so there is no audience window. Connected: HDMI-A-1.",
+                "Monitor eDP-1 is not connected, so the presenter stays a normal window. Connected: HDMI-A-1.",
+            ]
+        );
+        assert!(
+            placement
+                .missing(&["eDP-1".into(), "DP-6".into()])
+                .is_empty()
+        );
     }
 }
