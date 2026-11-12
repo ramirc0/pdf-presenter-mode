@@ -35,10 +35,11 @@ pub fn watch<T: Send + 'static>(
     notify: impl Fn() + Send + 'static,
 ) -> Receiver<T> {
     let (sender, receiver) = mpsc::channel();
+    // Stamped here, not in the thread, so a change right after the caller opened the files counts.
+    let mut loaded = stamps(&paths);
     std::thread::Builder::new()
         .name("watch".into())
         .spawn(move || {
-            let mut loaded = stamps(&paths);
             let mut warned = None;
             loop {
                 std::thread::sleep(every);
@@ -102,6 +103,17 @@ mod tests {
         std::fs::write(&file, "one").unwrap();
         let reloads = watch(vec![file.clone()], TICK, read(file.clone()), || {});
         std::thread::sleep(TICK * 3);
+        save(&file, "three");
+        assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "three");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_change_right_after_the_watch_starts_reopens() {
+        let dir = scratch("early");
+        let file = dir.join("deck");
+        save(&file, "one");
+        let reloads = watch(vec![file.clone()], TICK, read(file.clone()), || {});
         save(&file, "three");
         assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "three");
         std::fs::remove_dir_all(dir).unwrap();
