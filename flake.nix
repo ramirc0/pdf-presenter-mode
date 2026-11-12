@@ -65,7 +65,8 @@
           rust-analyzer
           rustc
           rustfmt
-          sway
+          # Without the wrapper, which starts a D-Bus session that the CI runners cannot.
+          sway-unwrapped
           typst
           wl-clipboard
           wtype
