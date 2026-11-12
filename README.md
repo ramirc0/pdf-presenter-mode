@@ -45,7 +45,8 @@ Cargo installs only the binary. To list ppm in app launchers and in "Open with" 
 ppm --install-desktop-entry
 ```
 
-It writes `~/.local/share/applications/ppm.desktop`, which starts the binary by its full path.
+It writes `~/.local/share/applications/ppm.desktop`, which starts the binary by its full path,
+and the icon `~/.local/share/icons/hicolor/scalable/apps/ppm.svg`.
 
 With Nix, install the flake's package into your profile:
 
@@ -54,7 +55,10 @@ nix profile install github:ramirc0/pdf-presenter-mode
 ```
 
 Outside NixOS, wrap the Nix build with nixGL, for example `nixGLIntel ppm deck.pdf`.
-The package ships its own desktop entry, so it needs no `--install-desktop-entry`.
+The package ships its own desktop entry and icon, so it needs no `--install-desktop-entry`.
+
+To pin a release, name its tag: `cargo install --locked --git https://github.com/ramirc0/pdf-presenter-mode --tag v0.1.0`,
+or `nix profile install github:ramirc0/pdf-presenter-mode/v0.1.0`.
 
 To build from source, enter the dev shell with `nix develop` or let direnv load it, then run `just` to list the tasks.
 
@@ -72,6 +76,7 @@ ppm deck.pdf
 * `--notes talk.pdfpc` reads the notes from that file.
 
 Without a deck, `ppm` opens a start page. The desktop entry opens it too when started from a launcher.
+A deck that does not open, from the command line or "Open with", also lands on the start page, with the reason.
 
 ![The start page: the deck, recent decks, a map of the monitors, and where each view goes](docs/start.png)
 
@@ -79,7 +84,7 @@ Without a deck, `ppm` opens a start page. The desktop entry opens it too when st
   The page shows the slide count and how many slides have notes, or why the deck did not open.
 * Click a monitor on the map to put the audience there. Identify shows each monitor's name on it for 3 seconds.
 * By default the audience takes the first external monitor, and the presenter goes fullscreen on the monitor the page is on.
-* The timer starts from the notes file's countdown. Type minutes or an end time to change it.
+* The timer starts from the notes file's countdown. Type minutes or an end time to change it, or clear both fields for no countdown.
 
 Keys without a modifier:
 
@@ -131,8 +136,29 @@ Each slide keeps its own ink until Alt+`e` erases it.
 Turning the laser off keeps the ink.
 A reload of the deck erases all ink. Ink is not saved.
 
+Links on the presenter's current slide work while the laser is off.
+A link to another slide goes there, and the audience follows.
+A web or mail link opens in the default browser, which stays on your screen.
+Links to files and to other apps' schemes do not open. Links in the notes follow the same rule.
+
+During a talk, ppm asks the compositor to keep the screen awake, through Wayland's idle inhibit protocol.
+
 Drag the lines between the presenter panels to resize them.
 The layout, the panel sizes and the notes size are saved in `~/.local/share/ppm`.
+
+### Warnings and the log
+
+When something goes wrong during a talk, a red line above the presenter's status bar says what.
+The audience never sees it. Each line goes away once its cause is fixed:
+
+* a deck that did not reload, while the last good version stays on screen;
+* a notes file that does not parse, while the notes from before stay;
+* a monitor named with `--audience` or `--presenter` that is not connected.
+
+Click a line to copy it, or click the log line under it to copy the log file's path.
+
+Each run writes `~/.local/state/ppm/ppm.log`, with the run before it in `ppm.log.1`.
+It holds the warnings, the decks opened, the monitors, and any crash. Attach it to a bug report.
 
 ### Speaker notes in typslides
 
@@ -188,8 +214,9 @@ ppm --help
   Build with the system's toolchain, inside the dev shell, or install the flake package.
 * "Found no glutin configs" means GL found no driver. Run a Nix build through nixGL.
 * No notes show: check that the attachment's name ends in `.pdfpc`, for example with `pdfdetach -list deck.pdf`.
-  A notes file that fails to parse prints a warning and the talk opens without notes.
-* A PDF caught half-written during a reload keeps the old deck on screen. `ppm` retries every second.
+  A notes file that fails to parse shows a warning, and the talk opens without notes.
+* A PDF caught half-written during a reload keeps the old deck on screen. `ppm` retries every second,
+  and warns only if the same version fails twice.
 
 ## Authors
 
