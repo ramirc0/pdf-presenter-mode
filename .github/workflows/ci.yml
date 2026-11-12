@@ -43,3 +43,5 @@ jobs:
         run: nix build -L
       - name: Validate the desktop entry
         run: nix shell --inputs-from . nixpkgs#desktop-file-utils -c desktop-file-validate result/share/applications/ppm.desktop
+      - name: Check the icon
+        run: test -f result/share/icons/hicolor/scalable/apps/ppm.svg

@@ -1,4 +1,4 @@
-//! The desktop entry, which lists ppm in app launchers and in "Open with" menus.
+//! The desktop entry, which lists ppm in app launchers and in "Open with" menus, and its icon.
 
 use std::path::{Path, PathBuf};
 
@@ -9,26 +9,39 @@ use crate::xdg;
 /// The entry the Nix package installs. Its `Exec` starts `ppm` from the `PATH`.
 const ENTRY: &str = include_str!("../assets/ppm.desktop");
 
+/// The icon the entry names, `ppm`.
+const ICON: &str = include_str!("../assets/ppm.svg");
+
 /// Writes the desktop entry to `$XDG_DATA_HOME/applications`, by default `~/.local/share/applications`,
-/// so that it starts this program by its full path. Returns the path written.
+/// so that it starts this program by its full path, and the icon to the hicolor theme beside it.
+/// Returns the paths written.
 ///
 /// # Errors
 ///
 /// Fails as [`xdg::data_home`] does, if this program's path is unknown,
-/// or if the file cannot be written.
-pub fn install() -> anyhow::Result<PathBuf> {
+/// or if a file cannot be written.
+pub fn install() -> anyhow::Result<[PathBuf; 2]> {
     let program = std::env::current_exe().context("cannot find this program's path")?;
     install_into(&xdg::data_home()?, &program)
 }
 
-/// Writes the entry for `program` into the `applications` folder of `data`.
-fn install_into(data: &Path, program: &Path) -> anyhow::Result<PathBuf> {
-    let folder = data.join("applications");
-    std::fs::create_dir_all(&folder)
+/// Writes the entry for `program` and the icon under `data`.
+fn install_into(data: &Path, program: &Path) -> anyhow::Result<[PathBuf; 2]> {
+    let entry = write(
+        &data.join("applications"),
+        "ppm.desktop",
+        &entry_for(program),
+    )?;
+    let icon = write(&data.join("icons/hicolor/scalable/apps"), "ppm.svg", ICON)?;
+    Ok([entry, icon])
+}
+
+/// Writes `contents` to the file `name` in `folder`, which it creates if needed.
+fn write(folder: &Path, name: &str, contents: &str) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(folder)
         .with_context(|| format!("cannot create {}", folder.display()))?;
-    let path = folder.join("ppm.desktop");
-    std::fs::write(&path, entry_for(program))
-        .with_context(|| format!("cannot write {}", path.display()))?;
+    let path = folder.join(name);
+    std::fs::write(&path, contents).with_context(|| format!("cannot write {}", path.display()))?;
     Ok(path)
 }
 
@@ -75,15 +88,17 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_is_written_under_applications() {
+    fn the_entry_and_the_icon_are_written_under_the_data_folder() {
         let data = std::env::temp_dir().join(format!("ppm-desktop-{}", std::process::id()));
-        let path = install_into(&data, Path::new("/usr/bin/ppm")).unwrap();
-        assert_eq!(path, data.join("applications/ppm.desktop"));
+        let [entry, icon] = install_into(&data, Path::new("/usr/bin/ppm")).unwrap();
+        assert_eq!(entry, data.join("applications/ppm.desktop"));
         assert!(
-            std::fs::read_to_string(&path)
+            std::fs::read_to_string(&entry)
                 .unwrap()
                 .contains("Exec=\"/usr/bin/ppm\" %f")
         );
+        assert_eq!(icon, data.join("icons/hicolor/scalable/apps/ppm.svg"));
+        assert_eq!(std::fs::read_to_string(&icon).unwrap(), ICON);
         std::fs::remove_dir_all(data).unwrap();
     }
 }

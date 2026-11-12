@@ -67,7 +67,7 @@ struct Cli {
     #[arg(long, conflicts_with = "audience", requires = "deck")]
     windowed_audience: bool,
     /// List ppm in app launchers and "Open with" menus, by writing a desktop entry that starts
-    /// this program to ~/.local/share/applications. For installs without a package manager.
+    /// this program to ~/.local/share/applications, and its icon. For installs without a package manager.
     #[arg(long, exclusive = true)]
     install_desktop_entry: bool,
 }
@@ -79,8 +79,9 @@ fn main() -> anyhow::Result<()> {
     logging::install()?;
     let cli = Cli::parse();
     if cli.install_desktop_entry {
-        let path = desktop::install()?;
-        println!("Wrote {}", path.display());
+        for path in desktop::install()? {
+            println!("Wrote {}", path.display());
+        }
         return Ok(());
     }
     if cli.presenter.is_some() && cli.presenter == cli.audience {

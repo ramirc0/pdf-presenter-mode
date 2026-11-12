@@ -4,6 +4,7 @@ Name=ppm
 GenericName=PDF Presenter
 Comment=Present a PDF slide deck with speaker notes
 Exec=ppm %f
+Icon=ppm
 Terminal=false
 MimeType=application/pdf;
 Categories=Office;Presentation;

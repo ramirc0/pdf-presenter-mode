@@ -37,6 +37,7 @@
           install -Dm644 LICENSE assets/fonts/ProggyForever-LICENSE.txt \
             -t $out/share/licenses/${cargoToml.package.name}
           install -Dm644 assets/ppm.desktop -t $out/share/applications
+          install -Dm644 assets/ppm.svg -t $out/share/icons/hicolor/scalable/apps
           substituteInPlace $out/share/applications/ppm.desktop \
             --replace-fail "Exec=ppm" "Exec=$out/bin/ppm"
         '';
