@@ -8,12 +8,12 @@ use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::deck::{Deck, PageSize};
-use crate::keys;
 use crate::pdfpc::Notes;
 use crate::render::{Placement, Renderer, Target, place};
 use crate::settings::{Layout, Settings};
 use crate::talk::{Action, Outcome, Talk};
 use crate::timer::{Urgency, clock_face};
+use crate::{keys, logging, xdg};
 
 /// One of the app's two windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,8 +43,14 @@ pub struct Stage {
     markdown: CommonMarkCache,
     talk: Talk,
     renderer: Renderer,
-    /// Decks reopened after their files changed.
-    reloads: Receiver<Deck>,
+    /// Decks reopened after their files changed, or why a version of the files did not open.
+    reloads: Receiver<anyhow::Result<Deck>>,
+    /// Why the newest version of the files did not open, while an older deck shows.
+    reload_error: Option<String>,
+    /// When the deck that shows was opened, in local time.
+    loaded_at: jiff::civil::Time,
+    /// How many warnings each window's status panel held in its last frame.
+    warnings_shown: [usize; 2],
     /// The renders each window drew in its last frame, most important first.
     shown: [Vec<Target>; 2],
     /// The overview thumbnails each window drew in its last frame. They render last.
@@ -70,12 +76,12 @@ struct Stroke {
 
 impl Stage {
     /// Presents `deck` from the first slide, with the presenter view arranged by `settings`.
-    /// Each deck from `reloads` replaces the current one. Textures go to `ctx`, and
-    /// `repaint` must repaint both windows.
+    /// Each deck from `reloads` replaces the current one, and each error from it shows as a
+    /// warning until a deck arrives. Textures go to `ctx`, and `repaint` must repaint both windows.
     pub fn new(
         deck: Deck,
         settings: Settings,
-        reloads: Receiver<Deck>,
+        reloads: Receiver<anyhow::Result<Deck>>,
         ctx: egui::Context,
         repaint: Repaint,
     ) -> Self {
@@ -87,6 +93,9 @@ impl Stage {
             talk,
             renderer: Renderer::new(ctx, deck.pdf, repaint.clone()),
             reloads,
+            reload_error: None,
+            loaded_at: jiff::Zoned::now().time(),
+            warnings_shown: [0, 0],
             shown: [Vec::new(), Vec::new()],
             thumbnails: [Vec::new(), Vec::new()],
             laser: None,
@@ -145,7 +154,18 @@ impl Stage {
     /// Draws `window`'s view into `ui`.
     /// The presenter view's status bar names `audience`, the monitor the audience is on.
     pub fn draw(&mut self, ui: &mut egui::Ui, window: Window, audience: Option<&str>) {
-        if let Some(deck) = self.reloads.try_iter().last() {
+        let mut newest = None;
+        for reload in self.reloads.try_iter() {
+            match reload {
+                Ok(deck) => {
+                    newest = Some(deck);
+                    self.reload_error = None;
+                }
+                Err(err) => self.reload_error = Some(format!("{err:#}")),
+            }
+        }
+        if let Some(deck) = newest {
+            self.loaded_at = jiff::Zoned::now().time();
             self.talk.reload(deck.pages.len());
             self.pages = deck.pages;
             self.notes = deck.notes;
@@ -183,7 +203,11 @@ impl Stage {
     fn draw_presenter(&mut self, ui: &mut egui::Ui, window: Window, audience: Option<&str>) {
         egui::Panel::bottom("status")
             .frame(egui::Frame::NONE.inner_margin(8))
-            .show(ui, |ui| self.show_status(ui, audience));
+            .show(ui, |ui| {
+                enlarge_text(ui.style_mut(), 1.4);
+                self.show_warnings(ui, window);
+                self.show_status(ui, audience);
+            });
         let body = ui.available_rect_before_wrap();
         if let Some(selected) = self.talk.overview() {
             self.show_overview(ui, window, body, selected);
@@ -375,8 +399,42 @@ impl Stage {
         });
     }
 
+    /// What the speaker should know is wrong, most pressing first.
+    fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if let Some(error) = &self.reload_error {
+            warnings.push(format!(
+                "Not reloaded: {error}. Still showing the version from {}.",
+                self.loaded_at.strftime("%H:%M")
+            ));
+        }
+        warnings
+    }
+
+    /// The warnings in red, then where the log file is. A change in their number reruns the
+    /// pass, since egui sizes the panel from its last frame.
+    fn show_warnings(&mut self, ui: &mut egui::Ui, window: Window) {
+        let warnings = self.warnings();
+        let shown = &mut self.warnings_shown[window as usize];
+        if *shown != warnings.len() {
+            *shown = warnings.len();
+            ui.ctx().request_discard("the warnings changed");
+        }
+        if warnings.is_empty() {
+            return;
+        }
+        let red = ui.visuals().error_fg_color;
+        for warning in warnings {
+            let text = egui::RichText::new(format!("! {warning}")).color(red);
+            ui.add(egui::Label::new(text).truncate());
+        }
+        if let Some(file) = logging::file() {
+            let text = egui::RichText::new(format!("Full log: {}", xdg::tilde_home(file))).weak();
+            ui.add(egui::Label::new(text).truncate());
+        }
+    }
+
     fn show_status(&self, ui: &mut egui::Ui, audience: Option<&str>) {
-        enlarge_text(ui.style_mut(), 1.4);
         let wall = jiff::Zoned::now();
         // The clock and timers tick once per second, in this window only.
         let to_next_second = 1_000_000_000 - wall.subsec_nanosecond().unsigned_abs();
@@ -589,6 +647,17 @@ mod tests {
     fn fixture_deck() -> Deck {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/basic.pdf");
         Deck::open(&path, None).unwrap()
+    }
+
+    /// The text of every label in `shapes`.
+    fn texts(shapes: &[egui::Shape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// A stage presenting the fixture deck, with textures going to `ctx`.
@@ -833,8 +902,47 @@ mod tests {
         drag(&ctx, &mut stage, ON_SLIDE, DRAG_TO);
         let (reload, reloads) = std::sync::mpsc::channel();
         stage.reloads = reloads;
-        reload.send(fixture_deck()).unwrap();
+        reload.send(Ok(fixture_deck())).unwrap();
         assert!(ink(&ctx, &mut stage, Window::Main).is_empty());
+    }
+
+    /// Whether `window` shows a warning line that starts with `start`.
+    fn warns(ctx: &egui::Context, stage: &mut Stage, window: Window, start: &str) -> bool {
+        texts(&shapes(ctx, stage, window, Vec::new()))
+            .iter()
+            .any(|text| text.starts_with(&format!("! {start}")))
+    }
+
+    #[test]
+    fn a_failed_reload_warns_until_a_reload_works() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        let (reload, reloads) = std::sync::mpsc::channel();
+        stage.reloads = reloads;
+        reload
+            .send(Err(anyhow::anyhow!("talk.pdf is incomplete")))
+            .unwrap();
+        assert!(warns(
+            &ctx,
+            &mut stage,
+            Window::Main,
+            "Not reloaded: talk.pdf is incomplete."
+        ));
+        reload.send(Ok(fixture_deck())).unwrap();
+        assert!(!warns(&ctx, &mut stage, Window::Main, "Not reloaded"));
+    }
+
+    #[test]
+    fn the_audience_view_never_warns_and_the_presenter_view_always_does() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        let (reload, reloads) = std::sync::mpsc::channel();
+        stage.reloads = reloads;
+        reload.send(Err(anyhow::anyhow!("broken"))).unwrap();
+        assert!(!warns(&ctx, &mut stage, Window::Projector, "Not reloaded"));
+        stage.talk.apply(Action::Swap, Instant::now());
+        assert!(warns(&ctx, &mut stage, Window::Projector, "Not reloaded"));
+        assert!(!warns(&ctx, &mut stage, Window::Main, "Not reloaded"));
     }
 
     #[test]

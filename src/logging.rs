@@ -6,7 +6,7 @@
 
 use std::fs::{File, TryLockError};
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -23,6 +23,7 @@ pub struct Logger {
 
 /// This run's log file, and the lock that makes it this run's.
 struct LogFile {
+    path: PathBuf,
     file: Mutex<File>,
     /// Held until ppm exits, so that a second ppm leaves the log alone.
     _lock: File,
@@ -63,6 +64,11 @@ pub fn keep_file() {
     }
 }
 
+/// This run's log file, if it keeps one.
+pub fn file() -> Option<&'static Path> {
+    LOGGER.file.get().map(|log| log.path.as_path())
+}
+
 /// Whether eframe has logged an error, which is how it reports a failed start.
 /// Other crates' errors, such as a failed paste in egui-winit, do not count.
 pub fn failed() -> bool {
@@ -91,6 +97,7 @@ fn open_log(dir: &Path) -> anyhow::Result<Option<LogFile>> {
     }
     let file = File::create(&path).with_context(|| format!("cannot create {}", path.display()))?;
     Ok(Some(LogFile {
+        path,
         file: Mutex::new(file),
         _lock: lock,
     }))

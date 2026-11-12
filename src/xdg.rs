@@ -1,7 +1,7 @@
-//! The XDG base directories that ppm writes to.
+//! Where ppm's files live: the XDG base directories it writes to, and paths shown from `~`.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
@@ -29,6 +29,15 @@ pub fn state_home() -> anyhow::Result<PathBuf> {
         std::env::var_os("HOME"),
         ".local/state",
     )
+}
+
+/// `path` with the home directory written as `~`.
+pub fn tilde_home(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) => Path::new("~").join(rest).display().to_string(),
+        None => path.display().to_string(),
+    }
 }
 
 /// The directory `value` names, or else `fallback` under `home`.

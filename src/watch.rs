@@ -23,7 +23,9 @@ fn stamps(paths: &[PathBuf]) -> Vec<Stamp> {
 /// Checking each path anew, instead of watching the file, also catches an editor or compiler
 /// that replaces the file by renaming a new one over it. If `open` fails, as it does on a
 /// half-written PDF, the old value stays in use and `open` runs again at the next check.
-/// Each failing version of the files logs one warning. The thread ends when the receiver is dropped.
+/// A file still being written changes by then. A version of the files that fails twice in a row
+/// is broken instead: its error arrives once, also logged as a warning.
+/// The thread ends when the receiver is dropped.
 ///
 /// # Panics
 ///
@@ -33,14 +35,15 @@ pub fn watch<T: Send + 'static>(
     every: Duration,
     open: impl Fn() -> anyhow::Result<T> + Send + 'static,
     notify: impl Fn() + Send + 'static,
-) -> Receiver<T> {
+) -> Receiver<anyhow::Result<T>> {
     let (sender, receiver) = mpsc::channel();
     // Stamped here, not in the thread, so a change right after the caller opened the files counts.
     let mut loaded = stamps(&paths);
     std::thread::Builder::new()
         .name("watch".into())
         .spawn(move || {
-            let mut warned = None;
+            // The version of the files that keeps failing, and how many times in a row it did.
+            let mut failing: Option<(Vec<Stamp>, u32)> = None;
             loop {
                 std::thread::sleep(every);
                 let now = stamps(&paths);
@@ -49,17 +52,32 @@ pub fn watch<T: Send + 'static>(
                 }
                 match open() {
                     Ok(value) => {
-                        if sender.send(value).is_err() {
+                        if sender.send(Ok(value)).is_err() {
                             return;
                         }
                         loaded = now;
+                        failing = None;
                         notify();
                     }
-                    Err(err) if warned.as_ref() != Some(&now) => {
-                        log::warn!("keeping the old deck: {err:#}");
-                        warned = Some(now);
+                    Err(err) => {
+                        let times = match &mut failing {
+                            Some((version, times)) if *version == now => {
+                                *times += 1;
+                                *times
+                            }
+                            _ => {
+                                failing = Some((now, 1));
+                                1
+                            }
+                        };
+                        if times == 2 {
+                            log::warn!("keeping the old deck: {err:#}");
+                            if sender.send(Err(err)).is_err() {
+                                return;
+                            }
+                            notify();
+                        }
                     }
-                    Err(_) => {}
                 }
             }
         })
@@ -104,7 +122,7 @@ mod tests {
         let reloads = watch(vec![file.clone()], TICK, read(file.clone()), || {});
         std::thread::sleep(TICK * 3);
         save(&file, "three");
-        assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "three");
+        assert_eq!(reloads.recv_timeout(WAIT).unwrap().unwrap(), "three");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -115,7 +133,7 @@ mod tests {
         save(&file, "one");
         let reloads = watch(vec![file.clone()], TICK, read(file.clone()), || {});
         save(&file, "three");
-        assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "three");
+        assert_eq!(reloads.recv_timeout(WAIT).unwrap().unwrap(), "three");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -126,7 +144,7 @@ mod tests {
         let reloads = watch(vec![sidecar.clone()], TICK, read(sidecar.clone()), || {});
         std::thread::sleep(TICK * 3);
         save(&sidecar, "notes");
-        assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "notes");
+        assert_eq!(reloads.recv_timeout(WAIT).unwrap().unwrap(), "notes");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -148,8 +166,41 @@ mod tests {
         let reloads = watch(vec![file.clone()], TICK, open, || {});
         std::thread::sleep(TICK * 3);
         save(&file, "two");
-        assert_eq!(reloads.recv_timeout(WAIT).unwrap(), "whole");
+        // The second failure of the same version is reported, once.
+        let error = reloads.recv_timeout(WAIT).unwrap().unwrap_err();
+        assert_eq!(error.to_string(), "half written");
+        assert_eq!(reloads.recv_timeout(WAIT).unwrap().unwrap(), "whole");
         assert_eq!(attempts.load(Ordering::Relaxed), 4);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_version_that_fails_once_and_changes_is_not_reported() {
+        let dir = scratch("half");
+        let file = dir.join("deck");
+        save(&file, "one");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let open = {
+            let attempts = attempts.clone();
+            let file = file.clone();
+            move || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                let text = std::fs::read_to_string(&file)?;
+                if text == "half" {
+                    anyhow::bail!("half written");
+                }
+                Ok(text)
+            }
+        };
+        // A slow tick leaves time to finish the file between two checks.
+        let tick = Duration::from_millis(200);
+        let reloads = watch(vec![file.clone()], tick, open, || {});
+        save(&file, "half");
+        while attempts.load(Ordering::Relaxed) == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        save(&file, "whole");
+        assert_eq!(reloads.recv_timeout(WAIT).unwrap().unwrap(), "whole");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

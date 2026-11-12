@@ -13,6 +13,7 @@ use crate::presenter::Projector;
 use crate::settings::Recent;
 use crate::stage::enlarge_text;
 use crate::timer::{Countdown, Goal};
+use crate::xdg::tilde_home;
 
 /// Where the start page sends a window.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -539,15 +540,6 @@ fn spots(names: &[String], except: Option<&str>) -> Vec<Spot> {
         .chain(monitors)
         .chain([Spot::Window])
         .collect()
-}
-
-/// `path` with the home directory written as `~`.
-fn tilde_home(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
-        Some(rest) => Path::new("~").join(rest).display().to_string(),
-        None => path.display().to_string(),
-    }
 }
 
 /// `path` with a leading `~/` replaced by the home directory.
