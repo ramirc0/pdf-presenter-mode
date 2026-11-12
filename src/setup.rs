@@ -12,7 +12,7 @@ use crate::monitors::{Monitor, audience_monitor, names_of};
 use crate::presenter::Projector;
 use crate::settings::Recent;
 use crate::stage::enlarge_text;
-use crate::timer::Goal;
+use crate::timer::{Countdown, Goal};
 
 /// Where the start page sends a window.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -497,18 +497,20 @@ impl Setup {
 
     /// The talk the choices describe, with the window on `here`, once a deck is open.
     fn launch(&mut self, here: Option<&str>) -> Option<(Launch, Deck)> {
-        let goal = self.goal().ok()?;
+        let typed = self.goal().ok()?;
         let Some(Ok(_)) = &self.opened else {
             return None;
         };
         let Some(Ok(mut deck)) = self.opened.take() else {
             return None;
         };
-        // Only a countdown other than the notes file's overrides it, on reloads too.
-        let goal = goal.filter(|&goal| Some(goal) != deck.notes.schedule.goal);
-        if goal.is_some() {
-            deck.notes.schedule.goal = goal;
-        }
+        // Fields that still show the notes file's countdown follow the notes file, on reloads too.
+        let countdown = match typed {
+            _ if typed == deck.notes.schedule.goal => Countdown::FromNotes,
+            Some(goal) => Countdown::Fixed(goal),
+            None => Countdown::Off,
+        };
+        countdown.apply(&mut deck.notes.schedule);
         let audience = match &self.audience {
             Spot::Auto => Projector::Monitor { requested: None },
             Spot::Monitor(monitor) => Projector::Monitor {
@@ -521,7 +523,7 @@ impl Setup {
             notes: None,
             audience,
             presenter: self.presenter_on(here),
-            goal,
+            countdown,
         };
         Some((launch, deck))
     }
@@ -634,6 +636,53 @@ mod tests {
         };
         setup.open();
         setup
+    }
+
+    /// A copy of the fixture deck in its own folder, with a sidecar that counts down 20 minutes.
+    fn deck_with_countdown(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ppm-setup-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(fixture("basic.pdf"), dir.join("talk.pdf")).unwrap();
+        let notes = r#"{"pdfpcFormat": 2, "duration": 20, "pages": []}"#;
+        std::fs::write(dir.join("talk.pdfpc"), notes).unwrap();
+        dir.join("talk.pdf")
+    }
+
+    const TWENTY_MINUTES: Option<Goal> = Some(Goal::Length(Duration::from_secs(20 * 60)));
+
+    #[test]
+    fn clearing_the_timer_turns_the_countdown_off() {
+        let deck = deck_with_countdown("cleared");
+        let mut setup = opened(deck.to_str().unwrap());
+        assert_eq!(setup.minutes, "20");
+        setup.minutes.clear();
+        let (launch, opened) = setup.launch(Some("eDP-1")).unwrap();
+        assert_eq!(opened.notes.schedule.goal, None);
+        // A reload opens the deck the way the launch says, and must not bring the countdown back.
+        assert_eq!(launch.open().unwrap().notes.schedule.goal, None);
+        std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn untouched_timer_fields_follow_the_notes_file() {
+        let deck = deck_with_countdown("untouched");
+        let mut setup = opened(deck.to_str().unwrap());
+        let (launch, opened) = setup.launch(Some("eDP-1")).unwrap();
+        assert_eq!(opened.notes.schedule.goal, TWENTY_MINUTES);
+        assert_eq!(launch.open().unwrap().notes.schedule.goal, TWENTY_MINUTES);
+        std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_typed_countdown_overrides_the_notes_file() {
+        let deck = deck_with_countdown("typed");
+        let mut setup = opened(deck.to_str().unwrap());
+        setup.minutes = "30".into();
+        let (launch, opened) = setup.launch(Some("eDP-1")).unwrap();
+        let thirty = Some(Goal::Length(Duration::from_secs(30 * 60)));
+        assert_eq!(opened.notes.schedule.goal, thirty);
+        assert_eq!(launch.open().unwrap().notes.schedule.goal, thirty);
+        std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
     }
 
     #[test]

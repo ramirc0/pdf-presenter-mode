@@ -14,6 +14,28 @@ pub enum Goal {
     EndsAt(Time),
 }
 
+/// The countdown a talk runs, against the one its notes file sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Countdown {
+    /// Whatever the notes file sets, on every reload.
+    FromNotes,
+    /// This goal, whatever the notes file sets.
+    Fixed(Goal),
+    /// No countdown, whatever the notes file sets.
+    Off,
+}
+
+impl Countdown {
+    /// Puts this countdown into `schedule`, which came from the notes file.
+    pub fn apply(self, schedule: &mut Schedule) {
+        match self {
+            Countdown::FromNotes => {}
+            Countdown::Fixed(goal) => schedule.goal = Some(goal),
+            Countdown::Off => schedule.goal = None,
+        }
+    }
+}
+
 /// The countdown target and when to warn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Schedule {

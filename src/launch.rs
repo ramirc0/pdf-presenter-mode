@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::deck::{self, Deck};
 use crate::presenter::Projector;
-use crate::timer::Goal;
+use crate::timer::Countdown;
 
 /// A talk ready to start: the deck, its notes, and where each window goes.
 #[derive(Clone)]
@@ -17,21 +17,19 @@ pub struct Launch {
     pub audience: Projector,
     /// The monitor the presenter goes fullscreen on, or `None` for a normal window.
     pub presenter: Option<String>,
-    /// A countdown that replaces the notes file's.
-    pub goal: Option<Goal>,
+    /// The countdown, against the notes file's.
+    pub countdown: Countdown,
 }
 
 impl Launch {
-    /// Opens the deck and its notes, with `goal` in place of the notes file's countdown.
+    /// Opens the deck and its notes, with the launch's countdown.
     ///
     /// # Errors
     ///
     /// Fails as [`Deck::open`] does.
     pub fn open(&self) -> anyhow::Result<Deck> {
         let mut deck = Deck::open(&self.deck, self.notes.as_deref())?;
-        if self.goal.is_some() {
-            deck.notes.schedule.goal = self.goal;
-        }
+        self.countdown.apply(&mut deck.notes.schedule);
         Ok(deck)
     }
 

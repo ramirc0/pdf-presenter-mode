@@ -33,7 +33,7 @@ use crate::logging::StderrLog;
 use crate::monitors::{Monitor, Monitors};
 use crate::presenter::{Console, Projector, projector_id};
 use crate::settings::Recent;
-use crate::timer::Goal;
+use crate::timer::{Countdown, Goal};
 
 /// Present a PDF slide deck.
 #[derive(Parser)]
@@ -89,9 +89,13 @@ fn main() -> anyhow::Result<()> {
     }
     let talk = match cli.deck {
         Some(deck) => {
-            let goal = cli.end_time.map(Goal::EndsAt).or(cli
-                .duration
-                .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))));
+            let countdown = cli
+                .end_time
+                .map(Goal::EndsAt)
+                .or(cli
+                    .duration
+                    .map(|minutes| Goal::Length(Duration::from_secs(minutes * 60))))
+                .map_or(Countdown::FromNotes, Countdown::Fixed);
             let audience = if cli.windowed_audience {
                 Projector::Windowed
             } else {
@@ -104,7 +108,7 @@ fn main() -> anyhow::Result<()> {
                 notes: cli.notes,
                 audience,
                 presenter: cli.presenter,
-                goal,
+                countdown,
             };
             let deck = launch.open()?;
             Some((launch, deck))
