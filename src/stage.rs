@@ -54,6 +54,8 @@ pub struct Stage {
     loaded_at: jiff::civil::Time,
     /// How many warnings each window's status panel held in its last frame.
     warnings_shown: [usize; 2],
+    /// A short note at the end of the status bar, such as `copied`, and when it came.
+    notice: Option<(String, Instant)>,
     /// The renders each window drew in its last frame, most important first.
     shown: [Vec<Target>; 2],
     /// The overview thumbnails each window drew in its last frame. They render last.
@@ -100,6 +102,7 @@ impl Stage {
             reload_error: None,
             loaded_at: jiff::Zoned::now().time(),
             warnings_shown: [0, 0],
+            notice: None,
             shown: [Vec::new(), Vec::new()],
             thumbnails: [Vec::new(), Vec::new()],
             laser: None,
@@ -435,8 +438,9 @@ impl Stage {
         warnings
     }
 
-    /// The warnings in red, then where the log file is. A change in their number reruns the
-    /// pass, since egui sizes the panel from its last frame.
+    /// The warnings in red, then where the log file is. A click copies a warning, or the
+    /// log file's path. A change in their number reruns the pass, since egui sizes the panel
+    /// from its last frame.
     fn show_warnings(&mut self, ui: &mut egui::Ui, window: Window, missing: &[String]) {
         let warnings = self.warnings(missing);
         let shown = &mut self.warnings_shown[window as usize];
@@ -448,13 +452,22 @@ impl Stage {
             return;
         }
         let red = ui.visuals().error_fg_color;
+        let mut copied = None;
         for warning in warnings {
             let text = egui::RichText::new(format!("! {warning}")).color(red);
-            ui.add(egui::Label::new(text).truncate());
+            if copyable(ui, text).clicked() {
+                copied = Some(warning);
+            }
         }
         if let Some(file) = logging::file() {
             let text = egui::RichText::new(format!("Full log: {}", xdg::tilde_home(file))).weak();
-            ui.add(egui::Label::new(text).truncate());
+            if copyable(ui, text).clicked() {
+                copied = Some(file.display().to_string());
+            }
+        }
+        if let Some(text) = copied {
+            ui.ctx().copy_text(text);
+            self.notice = Some((String::from("copied"), Instant::now()));
         }
     }
 
@@ -524,9 +537,29 @@ impl Stage {
             if self.talk.quit_armed() {
                 ui.colored_label(ui.visuals().warn_fg_color, "Press q again to quit");
             }
+            if let Some((text, since)) = &self.notice {
+                let left = NOTICE.saturating_sub(since.elapsed());
+                if !left.is_zero() {
+                    ui.label(text);
+                    ui.ctx().request_repaint_after(left);
+                }
+            }
         });
     }
 }
+
+/// A one-line label that a click copies: cut short to fit, with a hand over it.
+fn copyable(ui: &mut egui::Ui, text: egui::RichText) -> egui::Response {
+    let label = egui::Label::new(text)
+        .truncate()
+        .selectable(false)
+        .sense(egui::Sense::click());
+    ui.add(label)
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// How long a notice shows at the end of the status bar.
+const NOTICE: Duration = Duration::from_secs(2);
 
 /// The gap in points between a panel's edge and its content.
 const MARGIN: f32 = 8.0;
@@ -696,13 +729,13 @@ mod tests {
         )
     }
 
-    /// Runs one frame of `window` on `events`, as `presenter.rs` does, and returns its shapes.
-    fn shapes(
+    /// Runs one frame of `window` on `events`, as `presenter.rs` does.
+    fn run(
         ctx: &egui::Context,
         stage: &mut Stage,
         window: Window,
         events: Vec<egui::Event>,
-    ) -> Vec<egui::Shape> {
+    ) -> egui::FullOutput {
         let input = egui::RawInput {
             screen_rect: Some(SCREEN),
             events,
@@ -714,6 +747,16 @@ mod tests {
         });
         output.textures_delta.clear();
         output
+    }
+
+    /// Runs one frame of `window` on `events` and returns its shapes.
+    fn shapes(
+        ctx: &egui::Context,
+        stage: &mut Stage,
+        window: Window,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::Shape> {
+        run(ctx, stage, window, events)
             .shapes
             .into_iter()
             .map(|clipped| clipped.shape)
@@ -975,6 +1018,39 @@ mod tests {
         assert_eq!(stage.notes.on_page(0), Some("Sidecar note."));
         reload.send(Ok(fixture_deck())).unwrap();
         assert!(!warns(&ctx, &mut stage, Window::Main, "Notes ignored"));
+    }
+
+    #[test]
+    fn a_click_on_a_warning_copies_it() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        let (reload, reloads) = std::sync::mpsc::channel();
+        stage.reloads = reloads;
+        reload.send(Err(anyhow::anyhow!("broken"))).unwrap();
+        // egui hit-tests a press against the previous frame, so draw one first.
+        let line = shapes(&ctx, &mut stage, Window::Main, Vec::new())
+            .into_iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("! Not reloaded") => {
+                    Some(text.pos + egui::vec2(4.0, 4.0))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let click = vec![
+            egui::Event::PointerMoved(line),
+            left_button(line, true),
+            left_button(line, false),
+        ];
+        let output = run(&ctx, &mut stage, Window::Main, click);
+        let copied = output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::CopyText(text) if text.starts_with("Not reloaded: broken."))
+        });
+        assert!(copied, "{:?}", output.platform_output.commands);
+        assert!(
+            texts(&shapes(&ctx, &mut stage, Window::Main, Vec::new()))
+                .contains(&"copied".to_string())
+        );
     }
 
     #[test]
