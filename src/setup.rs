@@ -500,21 +500,19 @@ impl Setup {
     }
 
     /// The talk the choices describe, with the window on `here`, once a deck is open.
+    /// It opens the deck again, so the talk and its reload watch start from the files as they
+    /// are now. If that fails, the page shows why.
     fn launch(&mut self, here: Option<&str>) -> Option<(Launch, Deck)> {
         let typed = self.goal().ok()?;
-        let Some(Ok(_)) = &self.opened else {
-            return None;
-        };
-        let Some(Ok(mut deck)) = self.opened.take() else {
+        let Some(Ok(checked)) = &self.opened else {
             return None;
         };
         // Fields that still show the notes file's countdown follow the notes file, on reloads too.
         let countdown = match typed {
-            _ if typed == deck.notes.schedule.goal => Countdown::FromNotes,
+            _ if typed == checked.notes.schedule.goal => Countdown::FromNotes,
             Some(goal) => Countdown::Fixed(goal),
             None => Countdown::Off,
         };
-        countdown.apply(&mut deck.notes.schedule);
         let audience = match &self.audience {
             Spot::Auto => Projector::Monitor { requested: None },
             Spot::Monitor(monitor) => Projector::Monitor {
@@ -529,7 +527,13 @@ impl Setup {
             presenter: self.presenter_on(here),
             countdown,
         };
-        Some((launch, deck))
+        match launch.open() {
+            Ok(deck) => Some((launch, deck)),
+            Err(err) => {
+                self.opened = Some(Err(format!("{err:#}")));
+                None
+            }
+        }
     }
 }
 
@@ -708,6 +712,21 @@ mod tests {
         let mut setup = opened(&fixture("truncated.pdf"));
         assert!(matches!(&setup.opened, Some(Err(why)) if why.contains("%%EOF")));
         assert!(setup.launch(None).is_none());
+    }
+
+    #[test]
+    fn start_reads_the_files_as_they_are_now() {
+        let deck = deck_with_countdown("restart");
+        let mut setup = opened(deck.to_str().unwrap());
+        // The speaker fixes the notes after the page checked the deck.
+        let notes = r#"{"pdfpcFormat": 2, "pages": [{"idx": 0, "note": "Fixed."}]}"#;
+        std::fs::write(deck.with_extension("pdfpc"), notes).unwrap();
+        let (launch, opened) = setup.launch(Some("eDP-1")).unwrap();
+        assert_eq!(opened.notes.on_page(0), Some("Fixed."));
+        // The untouched fields showed the old notes' countdown, so the talk follows the notes file.
+        assert_eq!(launch.countdown, Countdown::FromNotes);
+        assert_eq!(opened.notes.schedule.goal, None);
+        std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
     }
 
     #[test]
