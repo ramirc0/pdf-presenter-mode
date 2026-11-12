@@ -166,10 +166,10 @@ fn handle_keys(ui: &egui::Ui, stage: &mut Stage, placement: &Mutex<Placement>, n
 }
 
 impl Console {
-    /// The start page, for a talk on `monitors` that offers the `recent` decks.
-    pub fn new(monitors: Monitors, recent: Recent) -> Self {
+    /// The start page `page`, for a talk on `monitors` that offers the `recent` decks.
+    pub fn new(monitors: Monitors, recent: Recent, page: Setup) -> Self {
         Self {
-            phase: Phase::Setup(Box::default()),
+            phase: Phase::Setup(Box::new(page)),
             monitors,
             placement: Arc::new(Mutex::new(Placement {
                 projector: Projector::Monitor { requested: None },

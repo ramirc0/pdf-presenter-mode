@@ -121,6 +121,17 @@ expect "a pasted path starts the talk" "$second fullscreen"
 kill "$copier"
 pkill -x -P "$$" ppm; sleep 0.5
 
+# A deck that fails on the command line opens the start page, which keeps the flags.
+# A good path there starts the talk.
+nixGLIntel "$ppm" "$root/fixtures/truncated.pdf" --presenter HEADLESS-1 >> "$work/ppm.log" 2>&1 &
+expect "a broken deck opens the start page" "none"
+wtype -s 300 -M ctrl -P a -s 50 -p a -m ctrl
+wtype -s 100 "$root/fixtures/basic.pdf"
+wtype -s 100 -P Return -s 50 -p Return
+expect "the start page keeps --presenter" "HEADLESS-1 fullscreen" presenter
+expect "a good path on that page starts the talk" "$second fullscreen"
+pkill -x -P "$$" ppm; sleep 0.5
+
 # Alt+m moves the audience along the monitors, past the presenter's.
 swaymsg create_output >/dev/null
 third=$(swaymsg -t get_outputs -r | jq -r '.[-1].name')

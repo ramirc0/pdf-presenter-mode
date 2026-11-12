@@ -47,6 +47,11 @@ pub struct Setup {
     minutes: String,
     /// The end time, as typed, such as `14:30`.
     ends_at: String,
+    /// Whether the speaker or the command line set the timer fields. Until then, each deck
+    /// opened fills them from its notes.
+    timer_typed: bool,
+    /// A pdfpc file whose notes replace the deck's own, from `--notes`.
+    notes: Option<PathBuf>,
     /// Whether the path field has had its first focus.
     focused: bool,
     /// The file chooser's answer, while it is open.
@@ -56,6 +61,35 @@ pub struct Setup {
 }
 
 impl Setup {
+    /// The page for a talk from the command line, `launch`, whose deck did not open, saying `why`.
+    /// It keeps the command line's choices.
+    pub fn retry(launch: &Launch, why: String) -> Self {
+        let audience = match &launch.audience {
+            Projector::Monitor { requested: None } => Spot::Auto,
+            Projector::Monitor {
+                requested: Some(monitor),
+            } => Spot::Monitor(monitor.clone()),
+            Projector::Windowed => Spot::Window,
+        };
+        let fixed = match launch.countdown {
+            Countdown::Fixed(goal) => Some(goal),
+            Countdown::FromNotes | Countdown::Off => None,
+        };
+        let (minutes, ends_at) = timer_fields(fixed);
+        Self {
+            path: tilde_home(&launch.deck),
+            opened: Some(Err(why)),
+            audience,
+            // Without --presenter, the presenter is a normal window.
+            presenter: launch.presenter.clone().map_or(Spot::Window, Spot::Monitor),
+            minutes,
+            ends_at,
+            timer_typed: fixed.is_some(),
+            notes: launch.notes.clone(),
+            ..Self::default()
+        }
+    }
+
     /// Draws the page into `ui`, with `monitors` connected, the window on the monitor
     /// named `here`, and the `recent` decks to offer. Returns the talk and its opened deck
     /// once the speaker starts it.
@@ -185,7 +219,9 @@ impl Setup {
             if field.changed() {
                 self.opened = None;
             }
-            if field.lost_focus() && self.opened.is_none() && !self.path.trim().is_empty() {
+            // Also a deck that failed, since its file may be fixed by now.
+            let unopened = !matches!(self.opened, Some(Ok(_)));
+            if field.lost_focus() && unopened && !self.path.trim().is_empty() {
                 self.open();
             }
             let open = egui::Button::new("Open…").min_size(egui::vec2(88.0, 0.0));
@@ -259,13 +295,11 @@ impl Setup {
 
     /// Opens the deck at the typed path, and fills the timer from its notes.
     fn open(&mut self) {
-        let opened = Deck::open(&expand_home(self.path.trim()), None);
-        if let Ok(deck) = &opened {
-            (self.minutes, self.ends_at) = match deck.notes.schedule.goal {
-                Some(Goal::Length(length)) => ((length.as_secs() / 60).to_string(), String::new()),
-                Some(Goal::EndsAt(time)) => (String::new(), time.strftime("%H:%M").to_string()),
-                None => (String::new(), String::new()),
-            };
+        let opened = Deck::open(&expand_home(self.path.trim()), self.notes.as_deref());
+        if let Ok(deck) = &opened
+            && !self.timer_typed
+        {
+            (self.minutes, self.ends_at) = timer_fields(deck.notes.schedule.goal);
         }
         self.opened = Some(opened.map_err(|err| format!("{err:#}")));
     }
@@ -428,13 +462,16 @@ impl Setup {
 
     fn show_timer(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.minutes).desired_width(48.0));
+            let minutes = ui.add(egui::TextEdit::singleline(&mut self.minutes).desired_width(48.0));
             ui.label("min, or ends at");
-            ui.add(
+            let ends_at = ui.add(
                 egui::TextEdit::singleline(&mut self.ends_at)
                     .hint_text("HH:MM")
                     .desired_width(80.0),
             );
+            if minutes.changed() || ends_at.changed() {
+                self.timer_typed = true;
+            }
             if let Err(why) = self.goal() {
                 ui.colored_label(ui.visuals().error_fg_color, why);
             }
@@ -522,7 +559,7 @@ impl Setup {
         };
         let launch = Launch {
             deck: expand_home(self.path.trim()),
-            notes: None,
+            notes: self.notes.clone(),
             audience,
             presenter: self.presenter_on(here),
             countdown,
@@ -534,6 +571,15 @@ impl Setup {
                 None
             }
         }
+    }
+}
+
+/// The minutes and end time fields that show `goal`.
+fn timer_fields(goal: Option<Goal>) -> (String, String) {
+    match goal {
+        Some(Goal::Length(length)) => ((length.as_secs() / 60).to_string(), String::new()),
+        Some(Goal::EndsAt(time)) => (String::new(), time.strftime("%H:%M").to_string()),
+        None => (String::new(), String::new()),
     }
 }
 
@@ -727,6 +773,59 @@ mod tests {
         assert_eq!(launch.countdown, Countdown::FromNotes);
         assert_eq!(opened.notes.schedule.goal, None);
         std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn retry_keeps_the_command_line_choices_also_after_a_reopen() {
+        let deck = deck_with_countdown("retry");
+        let notes = deck.with_extension("pdfpc");
+        let launch = Launch {
+            deck: deck.clone(),
+            notes: Some(notes.clone()),
+            audience: Projector::Monitor {
+                requested: Some("DP-6".into()),
+            },
+            presenter: None,
+            countdown: Countdown::Fixed(Goal::Length(Duration::from_secs(25 * 60))),
+        };
+        let mut setup = Setup::retry(&launch, "it was half written".into());
+        assert!(matches!(&setup.opened, Some(Err(why)) if why == "it was half written"));
+        assert_eq!(setup.audience, Spot::Monitor("DP-6".into()));
+        assert_eq!(setup.presenter, Spot::Window);
+        assert_eq!(setup.minutes, "25");
+        // The deck opens now, and its notes say 20 minutes. The command line said 25.
+        setup.open();
+        assert_eq!(setup.minutes, "25");
+        let (launch, opened) = setup.launch(Some("eDP-1")).unwrap();
+        assert_eq!(launch.notes, Some(notes));
+        assert_eq!(launch.presenter, None);
+        let twenty_five = Some(Goal::Length(Duration::from_secs(25 * 60)));
+        assert_eq!(opened.notes.schedule.goal, twenty_five);
+        std::fs::remove_dir_all(deck.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn enter_reopens_a_deck_that_did_not_open() {
+        let launch = Launch {
+            deck: fixture("basic.pdf").into(),
+            notes: None,
+            audience: Projector::Windowed,
+            presenter: None,
+            countdown: Countdown::FromNotes,
+        };
+        let mut setup = Setup::retry(&launch, "it was half written".into());
+        let ctx = egui::Context::default();
+        // The first frame gives the path field focus.
+        frame(&ctx, &mut setup, Vec::new());
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (started, _) = frame(&ctx, &mut setup, vec![enter]);
+        assert!(started.is_some());
     }
 
     #[test]

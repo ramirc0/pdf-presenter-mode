@@ -33,6 +33,7 @@ use crate::launch::Launch;
 use crate::monitors::{Monitor, Monitors};
 use crate::presenter::{Console, Projector, projector_id};
 use crate::settings::Recent;
+use crate::setup::Setup;
 use crate::timer::{Countdown, Goal};
 
 /// Present a PDF slide deck.
@@ -90,7 +91,7 @@ fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
         std::env::args().skip(1).collect::<Vec<_>>()
     );
-    let talk = match cli.deck {
+    let (talk, page) = match cli.deck {
         Some(deck) => {
             let countdown = cli
                 .end_time
@@ -113,10 +114,16 @@ fn main() -> anyhow::Result<()> {
                 presenter: cli.presenter,
                 countdown,
             };
-            let deck = launch.open()?;
-            Some((launch, deck))
+            match launch.open() {
+                Ok(deck) => (Some((launch, deck)), Setup::default()),
+                // Started from a file manager, ppm has no terminal to show the error in.
+                Err(err) => {
+                    log::warn!("{err:#}");
+                    (None, Setup::retry(&launch, format!("{err:#}")))
+                }
+            }
         }
-        None => None,
+        None => (None, Setup::default()),
     };
     let monitors = Monitors::default();
     let gui = Arc::new(OnceLock::new());
@@ -143,7 +150,7 @@ fn main() -> anyhow::Result<()> {
                 cc.egui_ctx
                     .all_styles_mut(|style| square_corners(&mut style.visuals));
                 gui.get_or_init(|| cc.egui_ctx.clone());
-                let mut console = Console::new(monitors, Recent::load(cc.storage));
+                let mut console = Console::new(monitors, Recent::load(cc.storage), page);
                 if let Some((launch, deck)) = talk {
                     console.start(launch, deck, &cc.egui_ctx, cc.storage);
                 }
