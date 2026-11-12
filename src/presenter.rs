@@ -109,6 +109,7 @@ impl Placement {
             self.shown_on.as_deref(),
             self.presenter_at.as_deref(),
         )?;
+        log::info!("Alt+m moves the audience to {}", names[next]);
         *requested = Some(names[next].clone());
         self.shown_on = Some(names[next].clone());
         Some(next)
@@ -272,6 +273,7 @@ impl Console {
         let Some((builder, monitor)) = placed else {
             // Not showing the viewport this frame closes it, so it cannot land on the laptop panel.
             if placement.shown_on.take().is_some() {
+                log::info!("audience closed");
                 stage
                     .lock()
                     .expect("stage poisoned")
@@ -279,6 +281,9 @@ impl Console {
             }
             return;
         };
+        if placement.shown_on.as_ref() != Some(&monitor) {
+            log::info!("audience on {monitor}");
+        }
         placement.shown_on = Some(monitor);
         drop(placement);
         let stage = stage.clone();

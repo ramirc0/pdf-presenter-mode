@@ -62,11 +62,25 @@ impl Deck {
             Some(notes) => read_notes(notes)?,
             None => notes_beside(&pdf, path),
         };
-        Ok(Self {
+        let deck = Self {
             pdf: Arc::new(pdf),
             pages,
             notes,
-        })
+        };
+        log::info!(
+            "opened {}: {} slides, notes on {}",
+            path.display(),
+            deck.pages.len(),
+            deck.noted()
+        );
+        Ok(deck)
+    }
+
+    /// How many slides have a note.
+    pub fn noted(&self) -> usize {
+        (0..self.pages.len())
+            .filter(|&page| self.notes.on_page(page).is_some())
+            .count()
     }
 }
 

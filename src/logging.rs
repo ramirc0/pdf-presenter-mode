@@ -1,4 +1,5 @@
-//! Warnings and errors, printed to stderr and kept in a log file for bug reports.
+//! Warnings and errors, printed to stderr and kept in a log file for bug reports,
+//! with ppm's own info lines in the file only.
 //!
 //! eframe reports a failed start, such as a missing GL driver, only through `log`,
 //! so without a logger the app would exit silently with status 0.
@@ -13,8 +14,8 @@ use anyhow::Context as _;
 
 use crate::xdg;
 
-/// Prints warnings and errors to stderr, copies them to the log file once there is one,
-/// and remembers whether eframe logged an error.
+/// Prints warnings and errors to stderr, copies them and ppm's info lines to the log file
+/// once there is one, and remembers whether eframe logged an error.
 pub struct Logger {
     failed: AtomicBool,
     file: OnceLock<LogFile>,
@@ -37,7 +38,7 @@ static LOGGER: Logger = Logger::new();
 /// Fails if a logger is installed already.
 pub fn install() -> anyhow::Result<()> {
     log::set_logger(&LOGGER)?;
-    log::set_max_level(log::LevelFilter::Warn);
+    log::set_max_level(log::LevelFilter::Info);
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
@@ -115,9 +116,14 @@ impl Logger {
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        // egui_commonmark installs image loaders even with its image features off,
-        // so egui_extras would warn on every launch that it has none.
-        metadata.level() <= log::Level::Warn && metadata.target() != "egui_extras::loaders"
+        let target = metadata.target();
+        match metadata.level() {
+            // egui_commonmark installs image loaders even with its image features off,
+            // so egui_extras would warn on every launch that it has none.
+            log::Level::Error | log::Level::Warn => target != "egui_extras::loaders",
+            log::Level::Info => target == "ppm" || target.starts_with("ppm::"),
+            log::Level::Debug | log::Level::Trace => false,
+        }
     }
 
     fn log(&self, record: &log::Record) {
@@ -127,7 +133,9 @@ impl log::Log for Logger {
         if record.level() == log::Level::Error && record.target().starts_with("eframe") {
             self.failed.store(true, Ordering::Relaxed);
         }
-        eprintln!("{}: {}: {}", record.level(), record.target(), record.args());
+        if record.level() <= log::Level::Warn {
+            eprintln!("{}: {}: {}", record.level(), record.target(), record.args());
+        }
         self.append(format_args!(
             "{}: {}: {}",
             record.level(),
@@ -178,10 +186,26 @@ mod tests {
     }
 
     #[test]
-    fn info_and_debug_are_dropped() {
+    fn info_from_ppm_is_kept_and_from_other_crates_dropped() {
         let log = Logger::new();
-        assert!(!log.enabled(&log::Metadata::builder().level(log::Level::Info).build()));
-        assert!(log.enabled(&log::Metadata::builder().level(log::Level::Warn).build()));
+        let at = |level, target| log::Metadata::builder().level(level).target(target).build();
+        assert!(log.enabled(&at(log::Level::Info, "ppm")));
+        assert!(log.enabled(&at(log::Level::Info, "ppm::watch")));
+        assert!(!log.enabled(&at(log::Level::Info, "ppmx")));
+        assert!(!log.enabled(&at(log::Level::Info, "eframe::native::run")));
+        assert!(!log.enabled(&at(log::Level::Debug, "ppm")));
+        assert!(log.enabled(&at(log::Level::Warn, "eframe::native::run")));
+    }
+
+    #[test]
+    fn info_from_ppm_reaches_the_file() {
+        let dir = scratch("info");
+        let log = Logger::new();
+        assert!(log.file.set(open_log(&dir).unwrap().unwrap()).is_ok());
+        record(log::Level::Info, "ppm::deck", &log);
+        let text = std::fs::read_to_string(dir.join("ppm.log")).unwrap();
+        assert!(text.ends_with(" INFO: ppm::deck: message\n"), "{text}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

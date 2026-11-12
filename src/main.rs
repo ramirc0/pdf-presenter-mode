@@ -85,6 +85,11 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("--audience and --presenter name the same monitor");
     }
     logging::keep_file();
+    log::info!(
+        "ppm {}, arguments {:?}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::args().skip(1).collect::<Vec<_>>()
+    );
     let talk = match cli.deck {
         Some(deck) => {
             let countdown = cli
@@ -206,6 +211,11 @@ impl Windows<'_> {
             .collect();
         let mut current = self.monitors.lock().expect("monitor list poisoned");
         if *current != list {
+            let described: Vec<String> = list
+                .iter()
+                .map(|m| format!("{} {}x{}", m.name, m.pixels[0], m.pixels[1]))
+                .collect();
+            log::info!("monitors: {}", described.join(", "));
             *current = list;
             if let Some(ctx) = self.gui.get() {
                 ctx.request_repaint_of(egui::ViewportId::ROOT);

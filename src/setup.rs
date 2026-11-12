@@ -273,11 +273,11 @@ impl Setup {
     fn show_check(&self, ui: &mut egui::Ui) {
         match &self.opened {
             Some(Ok(deck)) => {
-                let slides = deck.pages.len();
-                let noted = (0..slides)
-                    .filter(|&page| deck.notes.on_page(page).is_some())
-                    .count();
-                ui.weak(format!("{slides} slides · notes on {noted}"));
+                ui.weak(format!(
+                    "{} slides · notes on {}",
+                    deck.pages.len(),
+                    deck.noted()
+                ));
             }
             Some(Err(why)) => {
                 ui.colored_label(ui.visuals().error_fg_color, why);
