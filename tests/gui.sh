@@ -14,9 +14,14 @@ export XDG_DATA_HOME=$work/data XDG_STATE_HOME=$work/state
 unset DISPLAY
 
 cleanup() {
+  local status=$?
   pkill -x -P "$$" ppm 2>/dev/null || true
   [ -n "${copier:-}" ] && kill "$copier" 2>/dev/null || true
   [ -n "${SWAYSOCK:-}" ] && swaymsg exit >/dev/null 2>&1 || true
+  if [ "$status" -ne 0 ]; then
+    echo "sway log:"; cat "$work/sway.log" 2>/dev/null || true
+    echo "ppm log:"; cat "$work/ppm.log" 2>/dev/null || true
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -152,6 +157,5 @@ wtype -s 300 -M alt -P m -s 50 -p m -m alt
 expect "Alt+m skips the presenter's monitor" "$second fullscreen"
 
 if [ "$failures" -gt 0 ]; then
-  echo "ppm log:"; cat "$work/ppm.log"
   exit 1
 fi
