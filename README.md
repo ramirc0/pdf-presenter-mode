@@ -57,8 +57,8 @@ nix profile install github:ramirc0/pdf-presenter-mode
 Outside NixOS, wrap the Nix build with nixGL, for example `nixGLIntel ppm deck.pdf`.
 The package ships its own desktop entry and icon, so it needs no `--install-desktop-entry`.
 
-To pin a release, name its tag: `cargo install --locked --git https://github.com/ramirc0/pdf-presenter-mode --tag v0.1.0`,
-or `nix profile install github:ramirc0/pdf-presenter-mode/v0.1.0`.
+To pin a release, name its tag: `cargo install --locked --git https://github.com/ramirc0/pdf-presenter-mode --tag v0.1.1`,
+or `nix profile install github:ramirc0/pdf-presenter-mode/v0.1.1`.
 
 To build from source, enter the dev shell with `nix develop` or let direnv load it, then run `just` to list the tasks.
 
