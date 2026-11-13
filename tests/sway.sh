@@ -3,7 +3,7 @@
 # Source it from a script that runs inside the dev shell and sets $work to a scratch directory.
 
 # start_sway OUTPUTS CONFIG: starts sway with OUTPUTS virtual outputs set up by the sway CONFIG
-# lines, and exports WAYLAND_DISPLAY and SWAYSOCK for it.
+# lines, exports WAYLAND_DISPLAY and SWAYSOCK for it, and returns once it answers.
 start_sway() {
   local outputs=$1 before sock
   # shellcheck disable=SC2154 # The sourcing script sets work.
@@ -16,7 +16,13 @@ start_sway() {
     sock=$(comm -13 <(echo "$before") <(ls "$XDG_RUNTIME_DIR"/wayland-? 2>/dev/null) | head -1)
     if [ -n "$sock" ] && [ -S "$XDG_RUNTIME_DIR/sway-ipc.$UID.$pid.sock" ]; then
       export WAYLAND_DISPLAY=${sock##*/} SWAYSOCK=$XDG_RUNTIME_DIR/sway-ipc.$UID.$pid.sock
-      return
+      # The sockets open before sway finishes starting, which takes seconds while fontconfig
+      # fills a cold cache, as on CI. Each swaymsg waits up to 3 s for an answer.
+      for _ in $(seq 20); do
+        swaymsg -t get_version >/dev/null 2>&1 && return
+        sleep 0.1
+      done
+      break
     fi
     sleep 0.1
   done
