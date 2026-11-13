@@ -724,20 +724,30 @@ fn view_of(window: Window, swapped: bool) -> View {
 }
 
 /// The renders the windows need, most urgent first: everything on screen, then for each
-/// page on screen the page after it at the same size, then the overview thumbnails.
-/// That covers the next slide at the audience and current sizes, and the one after it
-/// at the next-slide panel's size.
+/// page on screen the page after it and the page before it at the same size, then the
+/// overview thumbnails. A step either way thus finds its renders ready. The previous and
+/// next slides wait at the audience and current sizes, and the current slide and the one
+/// after the next at the next-slide panel's size.
 fn plan<'a>(
     pages: usize,
     shown: impl Iterator<Item = &'a Target> + Clone,
     thumbnails: impl Iterator<Item = &'a Target>,
 ) -> Vec<Target> {
-    let ahead = shown.clone().map(|target| Target {
+    let after = shown.clone().map(|target| Target {
         page: target.page + 1,
         ..*target
     });
+    let before = shown.clone().filter_map(|target| {
+        let page = target.page.checked_sub(1)?;
+        Some(Target { page, ..*target })
+    });
     let mut wanted: Vec<Target> = Vec::new();
-    for target in shown.copied().chain(ahead).chain(thumbnails.copied()) {
+    for target in shown
+        .copied()
+        .chain(after)
+        .chain(before)
+        .chain(thumbnails.copied())
+    {
         if target.page < pages && !wanted.contains(&target) {
             wanted.push(target);
         }
@@ -1193,20 +1203,34 @@ mod tests {
     }
 
     #[test]
-    fn on_screen_pages_come_before_the_pages_after_them() {
+    fn on_screen_pages_come_before_their_neighbors() {
         let shown = [at(0, 1920), at(0, 640), at(1, 400)];
         let wanted = plan(3, shown.iter(), [].iter());
         let summary: Vec<_> = wanted.iter().map(|t| (t.page, t.width)).collect();
         assert_eq!(
             summary,
-            [(0, 1920), (0, 640), (1, 400), (1, 1920), (1, 640), (2, 400)]
+            [
+                (0, 1920),
+                (0, 640),
+                (1, 400),
+                (1, 1920),
+                (1, 640),
+                (2, 400),
+                (0, 400)
+            ]
         );
     }
 
     #[test]
     fn the_last_page_has_nothing_after_it() {
         let shown = [at(1, 1920)];
-        assert_eq!(plan(2, shown.iter(), [].iter()), [at(1, 1920)]);
+        assert_eq!(plan(2, shown.iter(), [].iter()), [at(1, 1920), at(0, 1920)]);
+    }
+
+    #[test]
+    fn the_first_page_has_nothing_before_it() {
+        let shown = [at(0, 1920)];
+        assert_eq!(plan(2, shown.iter(), [].iter()), [at(0, 1920), at(1, 1920)]);
     }
 
     #[test]
@@ -1225,8 +1249,61 @@ mod tests {
         let shown = [at(1, 1920)];
         let thumbnails = [at(0, 160), at(1, 160), at(2, 160)];
         let wanted = plan(3, shown.iter(), thumbnails.iter());
-        assert_eq!(wanted[..2], [at(1, 1920), at(2, 1920)]);
-        assert_eq!(wanted[2..], thumbnails);
+        assert_eq!(wanted[..3], [at(1, 1920), at(2, 1920), at(0, 1920)]);
+        assert_eq!(wanted[3..], thumbnails);
+    }
+
+    /// Draws frames of both windows until every render that `plan` wants can be drawn.
+    fn settle(ctx: &egui::Context, stage: &mut Stage) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            shapes(ctx, stage, Window::Main, Vec::new());
+            shapes(ctx, stage, Window::Projector, Vec::new());
+            let wanted = plan(
+                stage.pages.len(),
+                stage.shown.iter().flatten(),
+                stage.thumbnails.iter().flatten(),
+            );
+            if wanted
+                .into_iter()
+                .all(|target| stage.renderer.texture(target).is_some())
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the renders took over 5 s");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Whether a picture covers `pos` in `shapes`. Pictures are meshes with a texture
+    /// other than the default one, which is the font atlas.
+    fn pictured(shapes: &[egui::Shape], pos: egui::Pos2) -> bool {
+        shapes.iter().any(|shape| {
+            matches!(shape, egui::Shape::Mesh(mesh)
+                if mesh.texture_id != egui::TextureId::default()
+                    && mesh.calc_bounds().contains(pos))
+        })
+    }
+
+    #[test]
+    fn a_step_either_way_shows_the_slide_in_its_first_frame() {
+        let ctx = egui::Context::default();
+        let mut stage = fixture_stage(&ctx);
+        stage.talk.apply(Action::Pick(2), Instant::now());
+        for action in [Action::Next, Action::Previous, Action::Previous] {
+            settle(&ctx, &mut stage);
+            stage.talk.apply(action, Instant::now());
+            let projector = shapes(&ctx, &mut stage, Window::Projector, Vec::new());
+            assert!(
+                pictured(&projector, SCREEN.center()),
+                "after {action:?}, the projector's first frame shows no slide"
+            );
+            let main = shapes(&ctx, &mut stage, Window::Main, Vec::new());
+            assert!(
+                pictured(&main, ON_SLIDE),
+                "after {action:?}, the main window's first frame shows no current slide"
+            );
+        }
     }
 
     /// Whether `shapes` hold the presenter's status bar.
